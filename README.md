@@ -74,8 +74,7 @@ register is a bang box of multiplicity `n - 1` rather than `n` copies:
 
 ## Install
 
-Python ≥ 3.12. The runtime dependencies are `numpy`, `sympy` and the
-[ArchytasZX](https://github.com/Arhip-Dmitriev/ArchytasZX) ZX engine. With `matplotlib`
+Python ≥ 3.12. `numpy` and `sympy` are the only runtime dependencies. With `matplotlib`
 installed, output is typeset and ZX diagrams are drawn as images in terminals that show them;
 without it, both fall back to Unicode text.
 
@@ -159,11 +158,12 @@ The full reference documentation is in [`docs/`](https://github.com/Arhip-Dmitri
 
 ## How it relates to ArchytasZX
 
-DiracULA computes on its own symbolic path-sum core. It uses
-[ArchytasZX](https://github.com/Arhip-Dmitriev/ArchytasZX), a qufinite ZXW diagram-rewriting
-engine, for three things: drawing states as ZX diagrams, the Lean library against which
-certificates are checked, and the engine commands available in the shell after `:`. A ZX
-diagram is only a view of a DiracULA state; no result is computed through it.
+DiracULA is self-contained: it computes on its own symbolic path-sum core, draws ZX diagrams
+with its own copy of the qufinite ZXW diagram model, and checks certificates against its own
+Lean library over Mathlib. A ZX diagram is only a view of a DiracULA state; no result is
+computed through it. [ArchytasZX](https://github.com/Arhip-Dmitriev/ArchytasZX), a qufinite
+ZXW diagram-rewriting engine by the same author, is the separate tool for proving identities
+between ZX diagrams; the two projects share their origin, not their code at run time.
 
 ## Status
 
@@ -185,6 +185,7 @@ cd DiracULA
 python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 
+python -m pytest -n 8
 ruff format . && ruff check . && mypy diracula
 ```
 

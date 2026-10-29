@@ -26,8 +26,7 @@ abstract: >-
   on symbolic path sums: states, Born distributions and post-measurement states
   are derived as closed forms that hold for every size, never by simulation.
   Results can be certified in Lean 4 and Mathlib by a verified normaliser of
-  symbolic sums, and any state can be viewed as a qufinite ZXW diagram through
-  the ArchytasZX engine.
+  symbolic sums, and any state can be viewed as a qufinite ZXW diagram.
 keywords:
   - dirac notation
   - quantum algorithms

@@ -53,7 +53,6 @@ classifiers = [
     "Topic :: Software Development :: Interpreters",
 ]
 dependencies = [
-    "ArchytasZX>=2.0",
     "numpy",
     "sympy",
 ]
@@ -72,6 +71,8 @@ viz = [
     "matplotlib",
 ]
 dev = [
+    "pytest",
+    "pytest-xdist",
     "ruff",
     "mypy",
 ]
@@ -87,12 +88,16 @@ exclude = ["diracula.lean*"]
 
 [tool.setuptools.package-data]
 diracula = [
+    "py.typed",
     "lean/*.lean",
     "lean/DiracULA/*.lean",
     "lean/lakefile.toml",
     "lean/lean-toolchain",
     "lean/lake-manifest.json",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

@@ -21,15 +21,14 @@ var n
 show(|psi>)          # expected ..., got ... at n = 3
 ```
 
-Please include the full output, the command line you used, and the DiracULA and ArchytasZX
-versions.
+Please include the full output, the command line you used, and the DiracULA version.
 
 ## Conventions
 
 - **Nothing is simulated.** Results come from symbolic rewriting of path sums and closed-form
   summation; no state is expanded into an amplitude vector to produce a result.
 - **Amplitudes are never silently discarded.** Every global factor is kept exactly.
-- **The language depends on ArchytasZX; ArchytasZX never depends on the language.**
+- **DiracULA is self-contained.** It imports no other project's code.
 - **Determinism.** Printed output must not depend on hash order or the wall clock.
 - Docstrings are brief and describe either *what* a function is or *how* it works.
 - Every source file carries the Apache 2.0 header.

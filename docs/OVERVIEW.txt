@@ -97,7 +97,7 @@ syntax, equals the printed closed form for every value of its size symbols (LEAN
   - An assertion whose condition does not reduce to a truth value fails as undecided.
   - Programs using rand, a branch on a value that is not concrete, normalise, floating-point
     format specs or states assigned from Python cannot be certified; nor can results whose
-    proof needs an identity the normaliser does not prove yet.
+    proof needs an identity the normaliser does not prove yet (LEAN.txt, section 10).
   - An amplitude outside the ZX scalar and phase grammar, such as cos(t) of a real symbol t,
     has no ZX view.
   - The Python API is not yet stable between releases.

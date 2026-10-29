@@ -563,7 +563,7 @@ A result outside the certified fragment is an error, "cannot certify NAME: REASO
 never certified incorrectly. The following cannot be certified: rand, a while or if whose
 condition depends on a value that is not concrete, normalise, floating-point format specs,
 states assigned from Python, and results whose proof needs an identity the normaliser does
-not prove.
+not prove (LEAN.txt, section 10).
 
 Every assume statement becomes a hypothesis of each certificate written after it. Under
 --certify, an assert passes only when the certificate of its equation is written.

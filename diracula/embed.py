@@ -15,12 +15,12 @@
 
 ::
 
-    from archytaszx import azx               # or azx = archytaszx.Program()
-    azx("var n")                             # run statements; returns what they printed
-    azx.psi = azx.H ** azx.n | azx.ket(0) ** azx.n     # |psi> = H^@n |0>^@n
-    azx["|phi>"] = azx["|psi> - 2 |0><0|psi>"]         # expressions in the language syntax
-    y = azx.measure | azx.psi                # or azx.measure(azx.psi)
-    azx.A | azx.psi                          # A applied to |psi>; <a| | |b> is <a|b>
+    from diracula import ula               # or ula = diracula.Program()
+    ula("var n")                             # run statements; returns what they printed
+    ula.psi = ula.H ** ula.n | ula.ket(0) ** ula.n     # |psi> = H^@n |0>^@n
+    ula["|phi>"] = ula["|psi> - 2 |0><0|psi>"]         # expressions in the language syntax
+    y = ula.measure | ula.psi                # or ula.measure(ula.psi)
+    ula.A | ula.psi                          # A applied to |psi>; <a| | |b> is <a|b>
 
 A :class:`Value` wraps a state, operator or scalar. ``|`` is juxtaposition (application,
 inner and outer products, tensor of kets), ``@`` the tensor product, ``**`` the tensor power
@@ -38,9 +38,9 @@ from pathlib import Path
 
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.repl import display as D
-from archytaszx.repl import lang as L
-from archytaszx.semantics import pathsum as P
+from diracula import display as D
+from diracula import lang as L
+from diracula import pathsum as P
 
 _OWN = frozenset({"_interp", "_count"})
 
@@ -160,8 +160,8 @@ class Value:
 
     def __repr__(self) -> str:
         if isinstance(self.value, _BraOp):
-            return "<azx bra-operator>"
-        return f"<azx {self.program._interp._type(self.value)}: {self.ascii()}>"
+            return "<ula bra-operator>"
+        return f"<ula {self.program._interp._type(self.value)}: {self.ascii()}>"
 
     def sympy(self) -> sympy.Basic:
         """The sympy expression of a scalar or of a certain measured outcome."""
@@ -380,7 +380,7 @@ class Program:
 
     def certify(self, name: str, out_dir: str | os.PathLike[str] = ".") -> Path:
         """Writes the Lean certificate of the state, scalar or distribution ``name`` into
-        ``out_dir``; its path. Raises :class:`~archytaszx.repl.lang.LangError` when the result
+        ``out_dir``; its path. Raises :class:`~diracula.lang.LangError` when the result
         cannot be certified."""
         interp = self._interp
         saved = interp.certify_dir

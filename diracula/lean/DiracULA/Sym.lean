@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.Closed
+import DiracULA.Base
 
 /-!
 # Symbolic sums
@@ -14,7 +14,7 @@ denoting their sum under a valuation of the dimension symbols, coefficient atoms
 variables.
 -/
 
-namespace ArchytasZX.Sym
+namespace DiracULA.Sym
 
 open Complex Finset
 
@@ -1029,4 +1029,4 @@ theorem ipHas_add (x : ℕ) (p q : IPoly) (hp : ipHas x p = false) (hq : ipHas x
     simp only [ipAdd, List.foldr_cons] at ih ⊢
     exact ipHas_ins x _ _ _ hq.1 (ih hq.2)
 
-end ArchytasZX.Sym
+end DiracULA.Sym

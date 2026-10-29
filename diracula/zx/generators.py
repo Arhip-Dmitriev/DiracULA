@@ -15,14 +15,14 @@
 
 A :class:`GeneratorType` is a descriptive value object: it records, for a family of nodes
 such as the Z spider, what leg counts are permitted, how a node's
-:class:`~archytaszx.algebra.phase.PhaseVector` slot relates to its leg dimension, and how
+:class:`~diracula.zx.phase.PhaseVector` slot relates to its leg dimension, and how
 dimensions are shared across a node's legs. It carries no formula, no matrix and no lambda;
-a generator's denotation lives in :mod:`archytaszx.semantics.denote`. This module answers
+a generator's denotation lives in :mod:`tests.zxoracle.denote`. This module answers
 "is this node's shape legal", never "what does this node mean".
 
 Dimension policy is an enum the validator dispatches on, never a generator-name special
 case. ``ALL_LEGS_EQUAL``: every leg shares one
-:class:`~archytaszx.algebra.dimension.Dim`. ``PRODUCT_OF_LEGS_EQUAL``: the product of the input
+:class:`~diracula.zx.dimension.Dim`. ``PRODUCT_OF_LEGS_EQUAL``: the product of the input
 dims equals the product of the output dims, an empty side having product ``Dim.concrete(1)``.
 
 Leg policy is likewise a value object (:class:`LegPolicy`), so a validation report can name
@@ -62,7 +62,7 @@ class DimensionPolicy(enum.Enum):
     """How a generator type's leg dimensions relate to one another.
 
     ``ALL_LEGS_EQUAL``: every input and output port carries one shared
-    :class:`~archytaszx.algebra.dimension.Dim`. ``PRODUCT_OF_LEGS_EQUAL``: the product of the
+    :class:`~diracula.zx.dimension.Dim`. ``PRODUCT_OF_LEGS_EQUAL``: the product of the
     input dims equals the product of the output dims.
     """
 
@@ -120,8 +120,8 @@ class LegPolicy:
 class PhaseSchema(enum.Enum):
     """How a generator type's phase slot relates to its leg dimension.
 
-    ``TIED_TO_LEG_DIM``: the node's :class:`~archytaszx.algebra.phase.PhaseVector`, when
-    present, is built over the same :class:`~archytaszx.algebra.dimension.Dim` every leg
+    ``TIED_TO_LEG_DIM``: the node's :class:`~diracula.zx.phase.PhaseVector`, when
+    present, is built over the same :class:`~diracula.zx.dimension.Dim` every leg
     carries. ``NONE`` marks a phase-free generator.
     """
 
@@ -134,7 +134,7 @@ class GeneratorType:
     """Descriptive policy metadata for one generator family, e.g. the Z spider.
 
     A value object holding a leg policy, a phase schema and a dimension policy. It records
-    no denotation; see :mod:`archytaszx.semantics.denote`.
+    no denotation; see :mod:`tests.zxoracle.denote`.
     """
 
     name: str

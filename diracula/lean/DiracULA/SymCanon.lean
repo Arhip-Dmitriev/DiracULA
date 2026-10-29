@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.SymNorm
+import DiracULA.SymNorm
 
 /-!
 # Canonical terms and expressions
@@ -13,7 +13,7 @@ merges roots of unity of one order, evaluates constant factors and sorts the fac
 expression and merges terms of equal shape. Each keeps the value: `nfEx_den`.
 -/
 
-namespace ArchytasZX.Sym
+namespace DiracULA.Sym
 
 open Complex Finset
 
@@ -848,4 +848,4 @@ theorem nfEx_zero (ρ : Val) (hρ : ρ.OK) (fl : List ℕ) (hfl : FloorOK fl ρ)
     (h : nfEx fl e = []) (ν : ℕ → ℤ) : exDen ρ ν e = 0 := by
   rw [← nfEx_den ρ hρ fl hfl e ν, h]; rfl
 
-end ArchytasZX.Sym
+end DiracULA.Sym

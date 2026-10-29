@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.SymCanon
+import DiracULA.SymCanon
 
 /-!
 # Symbolic sums with integer atoms
@@ -18,9 +18,9 @@ an atom reads when every argument reading it is reduced modulo a divisor of the 
 modulus; the pinned value is substituted into the atoms' arguments.
 -/
 
-namespace ArchytasZX.LSym
+namespace DiracULA.LSym
 
-open ArchytasZX.Sym Complex Finset
+open DiracULA.Sym Complex Finset
 
 /-- The first atom variable; index variables lie below it. -/
 def ABASE : ℕ := 3000000
@@ -648,4 +648,4 @@ theorem elimPin_ok (V : LV) (hρ : V.ρ.OK) (x : ℕ) (D : DMon) (ats : List Ato
   rw [splits_spec ds p hp]
   exact elimPin1_ok V hρ x D ats _ _ _ _ e he
 
-end ArchytasZX.LSym
+end DiracULA.LSym

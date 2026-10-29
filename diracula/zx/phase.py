@@ -34,11 +34,11 @@ normalization are mathematically equal, but two mathematically equal phases may 
 unequal if this module cannot verify it (e.g. two symbolic expressions that happen to
 differ by an integer number of turns). Reporting "not equal" for something unverified is
 always preferred here to reporting "equal" for something unverified -- the same contract
-:meth:`archytaszx.algebra.dimension.Dim.unify` follows.
+:meth:`diracula.zx.dimension.Dim.unify` follows.
 
 The character-sum identity Sum_{k=0}^{d-1} omega_d^{jk} = d * [j == 0 mod d] is out of
-scope here. It belongs to :meth:`~archytaszx.algebra.scalar.Scalar.simplify`
-and must not be anticipated by this module or by :mod:`archytaszx.algebra.scalar`.
+scope here. It belongs to :meth:`~diracula.zx.scalar.Scalar.simplify`
+and must not be anticipated by this module or by :mod:`diracula.zx.scalar`.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from typing import Union, cast
 
 import sympy as sp  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.algebra.dimension import Dim
+from diracula.zx.dimension import Dim
 
 
 class PhaseError(Exception):
@@ -120,7 +120,7 @@ class Phase:
 
     The angle is ``2*pi * turns``, where ``turns`` is a sympy expression that may be a
     concrete Rational, a free symbol, or a compound expression such as ``j/d`` built
-    from a root-of-unity index and a (possibly symbolic) :class:`~archytaszx.algebra.dimension.Dim`.
+    from a root-of-unity index and a (possibly symbolic) :class:`~diracula.zx.dimension.Dim`.
     See the module docstring for the normalization and equality contract.
     """
 
@@ -157,7 +157,7 @@ class Phase:
     def root_of_unity(cls, index: int | sp.Expr, dim: Dim) -> Phase:
         """Build the phase of omega_d^index, i.e. angle 2*pi*index/d.
 
-        ``dim`` is a :class:`~archytaszx.algebra.dimension.Dim`, possibly symbolic; ``index``
+        ``dim`` is a :class:`~diracula.zx.dimension.Dim`, possibly symbolic; ``index``
         may be a concrete int or a symbolic sympy expression. The sympy layer is reached
         only through ``dim.to_sympy()``, per the per-port-dimension invariant: this
         module holds no ambient notion of "the current d".
@@ -240,7 +240,7 @@ class Phase:
         expression, and that symbol is substituted through the same mapping, since both
         live in one shared sympy expression. This module trusts a caller not to reuse one
         name for both roles in a way that is not the ``root_of_unity`` case above;
-        :class:`~archytaszx.diagram.validate.IssueKind.SYMBOL_ROLE_COLLISION` is what makes a
+        :class:`~tests.zxoracle.validate.IssueKind.SYMBOL_ROLE_COLLISION` is what makes a
         diagram where a name actually is reused across roles invalid in the first place.
         """
         subs_dict: dict[sp.Symbol, sp.Expr] = {}
@@ -324,7 +324,7 @@ class PhaseVector:
     this class rejects an explicit nonzero entry at index 0 outright, rather than
     silently absorbing or renormalizing it, so that a caller's mistake is never masked.
 
-    :class:`~archytaszx.algebra.dimension.Dim` has no subtraction, so the natural vector
+    :class:`~diracula.zx.dimension.Dim` has no subtraction, so the natural vector
     length ``d - 1`` is not itself representable as a Dim. This class therefore exposes
     :attr:`length` as a derived Python int (only when ``dim`` is concrete) rather than
     trying to construct a ``Dim`` for it.

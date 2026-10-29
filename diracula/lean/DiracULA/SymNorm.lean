@@ -2,8 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.Sym
-import ArchytasZX.Bundle
+import DiracULA.Sym
 
 /-!
 # The normaliser of symbolic sums
@@ -16,7 +15,7 @@ them. `nfEx` normalises every term and merges terms of equal shape; `nfEx_den` p
 keeps the value.
 -/
 
-namespace ArchytasZX.Sym
+namespace DiracULA.Sym
 
 open Complex Finset
 
@@ -596,4 +595,4 @@ theorem elimAll_ok (ρ : Val) (hρ : ρ.OK) (n : ℕ) (t : STm) (ν : ℕ → �
     · next t' h => rw [ih, elimStep_ok ρ hρ t t' h]
     · rfl
 
-end ArchytasZX.Sym
+end DiracULA.Sym

@@ -727,7 +727,7 @@ def solve(constraints: Sequence[tuple[Dim, Dim]], *, max_passes: int | None = No
 
 _MAX_UNIFY_ALL_PASSES = 32
 """Iteration budget for :func:`unify_all`'s bindings fixpoint. Module-level so a test can
-patch it low, mirroring :mod:`archytaszx.rewrite.match`'s ``_MAX_FIXPOINT_PASSES``."""
+patch it low."""
 
 
 @dataclass(frozen=True)
@@ -743,7 +743,7 @@ class UnifyAllResult:
 
     ``exhausted`` is the discriminator: ``False`` for an ordinary converged result, ``True``
     only when the pass budget ran out first. Both report ``status=DEFERRED``, and every
-    caller must keep them apart -- :mod:`archytaszx.diagram.validate`'s
+    caller must keep them apart -- :mod:`tests.zxoracle.validate`'s
     ``_check_generator_policy`` fails closed on ``exhausted`` with a hard error rather than
     folding it into the ordinary deferred-constraint bookkeeping. Every bounded fixpoint
     here keeps that distinction visible at the call site, not only internally.
@@ -758,9 +758,9 @@ class UnifyAllResult:
     ``bindings`` so that ``bindings`` stays usable by :meth:`Dim.substitute`, which takes
     concrete values only.
 
-    :mod:`archytaszx.diagram.validate`'s ``_check_generator_policy`` reports it, together with
+    :mod:`tests.zxoracle.validate`'s ``_check_generator_policy`` reports it, together with
     ``bindings``, as a deferred
-    :class:`~archytaszx.diagram.validate.IssueKind.DIMENSION_BOUND` issue.
+    :class:`~tests.zxoracle.validate.IssueKind.DIMENSION_BOUND` issue.
     """
 
     @property

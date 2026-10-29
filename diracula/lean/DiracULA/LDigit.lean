@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.LSym
+import DiracULA.LSym
 
 /-!
 # Digit-wise character sums
@@ -14,9 +14,9 @@ atom, which vanishes exactly when every digit of `Σ_k c_k A_k + B` (digit-wise)
 by `d`.
 -/
 
-namespace ArchytasZX.LSym
+namespace DiracULA.LSym
 
-open ArchytasZX.Sym Complex Finset
+open DiracULA.Sym Complex Finset
 
 /-! ## Digits -/
 
@@ -592,4 +592,4 @@ theorem elimDigit_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : 
             exact hf.2.1
     · simp at h
 
-end ArchytasZX.LSym
+end DiracULA.LSym

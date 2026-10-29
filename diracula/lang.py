@@ -69,11 +69,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.repl import display as D
-from archytaszx.repl import zxdraw, zxsym, zxview
-from archytaszx.repl.printer import DEFAULT_MODE, NotationMode
-from archytaszx.semantics import lean_lang as LL
-from archytaszx.semantics import pathsum as P
+from diracula import display as D
+from diracula import lean_lang as LL
+from diracula import pathsum as P
+from diracula import zxsym, zxview
+from diracula.zx import draw as zxdraw
+from diracula.zx.listing import DEFAULT_MODE, NotationMode
 
 
 class LangError(Exception):

@@ -35,12 +35,12 @@ unrenamed* -- the copies still denote one shared, not-yet-supplied count.
 instantiation: it acts on every live box currently carrying one bare symbol together, so
 a nested two-index family instantiates correctly regardless of which index goes first.
 
-Multiplicities: :class:`Mult`, not a :class:`~archytaszx.algebra.dimension.Dim`. ``Dim``'s
+Multiplicities: :class:`Mult`, not a :class:`~diracula.zx.dimension.Dim`. ``Dim``'s
 grammar deliberately rejects sums and floors at 1, while a multiplicity needs sums and
 admits 0 (``kill``) -- reusing ``Dim`` would weaken it for every dimension in the system.
 ``Mult`` mirrors ``Dim``'s shape (concrete int, symbol, sum, product; canonical sympy
 expression) but is never interchangeable with it. Its symbols carry an inert
-``multiplicity=True`` marker so :mod:`archytaszx.diagram.validate` never confuses one with a
+``multiplicity=True`` marker so :mod:`tests.zxoracle.validate` never confuses one with a
 dimension's exponent, which shares the same two real assumptions.
 """
 
@@ -52,9 +52,9 @@ from types import MappingProxyType
 
 import sympy as sp  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.algebra.phase import PhaseVector
-from archytaszx.diagram.generators import PhaseSchema
-from archytaszx.diagram.graph import BangBoxId, Diagram, Direction, NodeId, PortRef, Wire
+from diracula.zx.generators import PhaseSchema
+from diracula.zx.graph import BangBoxId, Diagram, Direction, NodeId, PortRef, Wire
+from diracula.zx.phase import PhaseVector
 
 
 class BangBoxError(Exception):
@@ -121,7 +121,7 @@ MultSubstituteValue = int
 class Mult:
     """An immutable, hashable multiplicity expression: a non-negative integer, possibly
     symbolic, built from concrete counts, symbols, sums, and products. See the module
-    docstring for why this is not a :class:`~archytaszx.algebra.dimension.Dim`.
+    docstring for why this is not a :class:`~diracula.zx.dimension.Dim`.
     """
 
     __slots__ = ("_expr",)
@@ -334,7 +334,7 @@ class BangBox:
         return replace(self, multiplicity=multiplicity)
 
 
-# -- structural helpers, shared with archytaszx.diagram.validate ---------------------------
+# -- structural helpers, shared with tests.zxoracle.validate ---------------------------
 
 
 def crossing_wires(diagram: Diagram, node_scope: frozenset[NodeId]) -> frozenset[Wire]:
@@ -395,7 +395,7 @@ def abstract_port_count(
 ) -> tuple[Diagram, BangBoxId, Mult]:
     """Abstract a concrete leg count at ``ref`` into a fresh port-scope bang box.
 
-    Mirrors :meth:`~archytaszx.algebra.dimension.Dim.abstract`: mints a symbol absent from
+    Mirrors :meth:`~diracula.zx.dimension.Dim.abstract`: mints a symbol absent from
     every symbol name (dimension, phase, scalar, or multiplicity) and every parameter-
     environment key already in ``diagram``, builds a port-scope box over ``{ref}`` bound
     to that symbol, binds the symbol to ``concrete_k`` in the parameter environment, and
@@ -449,8 +449,8 @@ def _purge_symbol_if_dead(diagram: Diagram, name: str | None) -> None:
     :func:`instantiate_symbol`), but killing a node-scope box also kills every child --
     each carrying its own, generally *different*, symbol -- as a side effect the caller
     never named. Without this, a killed child's leftover parameter binding is a pending
-    substitution against nothing, which :mod:`archytaszx.semantics.contract_numeric` refuses
-    outright even though :mod:`archytaszx.diagram.validate` only defers it.
+    substitution against nothing, which :mod:`tests.zxoracle.contract_numeric` refuses
+    outright even though :mod:`tests.zxoracle.validate` only defers it.
     """
     if name is not None and name not in free_mult_symbols(diagram) and name in diagram.parameters:
         diagram.set_parameters({k: v for k, v in diagram.parameters.items() if k != name})
@@ -1149,7 +1149,7 @@ def merge(
 
     Requires ``box_id_1`` and ``box_id_2`` to share a ``parent`` and have disjoint
     ``node_scope``\\ s (a non-disjoint, non-nested pair is already malformed --
-    :mod:`archytaszx.diagram.validate`'s job to catch, never this function's to repair).
+    :mod:`tests.zxoracle.validate`'s job to catch, never this function's to repair).
     Their multiplicities must be the identical symbol, or ``assume_equal=True`` must be
     passed to proceed anyway, asserting the two counts equal -- never inferred silently.
     The result's node_scope is the union; any wire that crossed from one into the

@@ -2,10 +2,10 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.LCanon
+import DiracULA.LCanon
 
 /-!
-# The meaning of .azx programs
+# The meaning of .ula programs
 
 A program value is a complex function of the index variables (`Fn`): output register `i` is
 variable `i`, input register `i` of an operator is variable `IN + i`, and every other variable
@@ -15,9 +15,9 @@ into one symbolic sum with atoms, and `Prog.sym_ok` proves the two agree. `certi
 program equal to an expression when the normal form of their difference is empty.
 -/
 
-namespace ArchytasZX.Lang
+namespace DiracULA.Lang
 
-open ArchytasZX ArchytasZX.Sym ArchytasZX.LSym Complex Finset
+open DiracULA.Sym DiracULA.LSym Complex Finset
 
 /-- Complex functions of the index variables. -/
 abbrev Fn := (ℕ → ℤ) → ℂ
@@ -684,11 +684,11 @@ theorem pow_floor (a b n : ℕ) (h : a = b ^ n) (hb : 2 ≤ b) (hn : 1 ≤ n) : 
     _ = b ^ 1 := (pow_one b).symm
     _ ≤ b ^ n := Nat.pow_le_pow_right (by omega) hn
 
-end ArchytasZX.Lang
+end DiracULA.Lang
 
-namespace ArchytasZX.Lang
+namespace DiracULA.Lang
 
-open ArchytasZX ArchytasZX.Sym ArchytasZX.LSym
+open DiracULA.Sym DiracULA.LSym
 
 theorem nfA_of_lit (fl : List ℕ) (PW : List (DMon × DMon)) (e : List ATm) (ns : List (Option ATm))
     (hn : e.map (normA fl PW AROUNDS) = ns) :
@@ -755,4 +755,4 @@ theorem certify_eq_lit (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK f
   exact certify_eq_lit_c V hρ fl hfl PW hPW p q e r ns he hr hn hz (by simp [hcp])
     (by simp [hcq]) ν (by simp [hcp, hcq])
 
-end ArchytasZX.Lang
+end DiracULA.Lang

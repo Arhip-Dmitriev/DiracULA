@@ -40,11 +40,10 @@ from typing import TypeAlias, cast
 
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.algebra.dimension import Dim, DimensionError
-from archytaszx.algebra.phase import INDEX, Phase, PhaseError, PhaseVector
-from archytaszx.algebra.scalar import Scalar, ScalarError
-from archytaszx.diagram.bangbox import Mult, _mult_symbol
-from archytaszx.diagram.generators import (
+from diracula import pathsum as P
+from diracula.zx.bangbox import Mult, _mult_symbol
+from diracula.zx.dimension import Dim, DimensionError
+from diracula.zx.generators import (
     DIM_BINDER,
     FOURIER_BOX,
     W_NODE,
@@ -52,8 +51,9 @@ from archytaszx.diagram.generators import (
     Z_SPIDER,
     GeneratorType,
 )
-from archytaszx.diagram.graph import Diagram, Direction, NodeId, PortRef
-from archytaszx.semantics import pathsum as P
+from diracula.zx.graph import Diagram, Direction, NodeId, PortRef
+from diracula.zx.phase import INDEX, Phase, PhaseError, PhaseVector
+from diracula.zx.scalar import Scalar, ScalarError
 
 Expr: TypeAlias = sympy.Expr
 
@@ -669,7 +669,7 @@ class _Term:
     def _weigh(self, idx: _Index, f: Expr) -> None:
         """A non-phase weight on a one-digit index of concrete base: a W node over Z
         effects whose sum is the weight divided by its value at 0."""
-        from archytaszx.repl import zxview
+        from diracula import zxview
 
         d = int(idx.family.radix)  # type: ignore[union-attr]
         values = [sympy.simplify(f.xreplace({idx.symbol: idx.lo + v})) for v in range(d)]

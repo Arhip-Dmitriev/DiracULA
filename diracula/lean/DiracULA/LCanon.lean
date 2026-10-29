@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import ArchytasZX.LDigit
+import DiracULA.LDigit
 
 /-!
 # The normaliser of symbolic sums with atoms
@@ -14,9 +14,9 @@ occurrence and sorting of the sums and the table. `nfA` normalises every term of
 and merges terms of equal shape; `nfA_den` proves it keeps the value.
 -/
 
-namespace ArchytasZX.LSym
+namespace DiracULA.LSym
 
-open ArchytasZX.Sym Complex Finset
+open DiracULA.Sym Complex Finset
 
 /-- `t'` has the value of `t`, or `t` vanishes. -/
 def ARes (V : LV) (t : ATm) : Option ATm → Prop
@@ -1253,4 +1253,4 @@ theorem axDen_neg (V : LV) (ν : ℕ → ℤ) (e : List ATm) : axDen V ν (axNeg
     simp only [axNeg, List.map_cons, axDen, List.sum_cons] at ih ⊢
     rw [ih, aden_withQ, aden_self V ν t]; push_cast; ring
 
-end ArchytasZX.LSym
+end DiracULA.LSym

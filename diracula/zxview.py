@@ -12,15 +12,15 @@
 # limitations under the License.
 
 
-"""ZXW diagrams of :mod:`archytaszx.semantics.pathsum` states and density matrices, built
+"""ZXW diagrams of :mod:`diracula.pathsum` states and density matrices, built
 from the path sum's structure rather than from its amplitudes.
 
-One term is translated by :mod:`archytaszx.repl.zxsym`: digit indices are Z spiders in bang
+One term is translated by :mod:`diracula.zxsym`: digit indices are Z spiders in bang
 boxes of the register widths, any other index or amplitude factor a gadget, the same graph
 for every value of the sizes. Several terms of a concrete state are summed exactly by a
 selector: a W node fans ``|1, payload>`` out to one copy per term (see :func:`_sum`), each
 term a block of digit spiders (:class:`_Planner`); a sum without that form is folded into one
-term by :mod:`~archytaszx.repl.zxsym`. A one-register ket of literal terms is drawn from its
+term by :mod:`~diracula.zxsym`. A one-register ket of literal terms is drawn from its
 amplitude vector: pick the first s with ``c_s != 0`` and set ``u_k = c_{k+s mod D} / c_s``; a
 W node read backwards adds the components of the Z effects on its outputs::
 
@@ -41,10 +41,11 @@ from dataclasses import dataclass, field
 
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.algebra.dimension import Dim
-from archytaszx.algebra.phase import Phase, PhaseVector
-from archytaszx.algebra.scalar import Scalar
-from archytaszx.diagram.generators import (
+from diracula import pathsum as P
+from diracula import zxsym
+from diracula.zx.dimension import Dim
+from diracula.zx.draw import View
+from diracula.zx.generators import (
     DIM_BINDER,
     DIM_SPLITTER,
     FOURIER_BOX,
@@ -52,10 +53,10 @@ from archytaszx.diagram.generators import (
     X_SPIDER,
     Z_SPIDER,
 )
-from archytaszx.diagram.graph import Diagram, Direction, NodeId, PortRef
-from archytaszx.repl import zxsym
-from archytaszx.repl.printer import render_graph
-from archytaszx.semantics import pathsum as P
+from diracula.zx.graph import Diagram, Direction, NodeId, PortRef
+from diracula.zx.listing import render_graph
+from diracula.zx.phase import Phase, PhaseVector
+from diracula.zx.scalar import Scalar
 
 MAX_TABLE = 256
 """The largest digit range whose weights are tabulated one value at a time."""
@@ -67,19 +68,6 @@ class ZXViewError(Exception):
 
 class _NoForm(Exception):
     """A term outside the structural translation."""
-
-
-@dataclass
-class View:
-    """A diagram with the nodes of each summed term grouped: ``groups`` maps a node to its
-    term, ``labels`` names each term, ``outputs`` names the outputs (``out k`` when empty) and
-    ``notes`` define dimension names."""
-
-    diagram: Diagram
-    groups: dict[NodeId, int] = field(default_factory=dict)
-    labels: dict[int, str] = field(default_factory=dict)
-    outputs: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
 
 
 # -- dense construction ----------------------------------------------------------------------

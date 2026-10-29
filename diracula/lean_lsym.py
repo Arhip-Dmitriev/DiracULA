@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The mirror of ``ArchytasZX.LSym``, ``LDigit`` and ``LCanon``: symbolic sums with integer
+"""The mirror of ``DiracULA.LSym``, ``LDigit`` and ``LCanon``: symbolic sums with integer
 atoms and their normaliser, on tuples.
 
 An atom is ``(id, f, ks, dp, args)``, each argument ``(IPoly, DMon)``; a term is
@@ -25,7 +25,7 @@ from collections.abc import Callable, Sequence
 from fractions import Fraction
 from typing import Any
 
-from archytaszx.semantics import lean_sym as Y
+from diracula import lean_sym as Y
 
 Atom = tuple[int, int, tuple[int, ...], tuple[Y.DMon, ...], tuple[tuple[Y.IPoly, Y.DMon], ...]]
 ATm = tuple[

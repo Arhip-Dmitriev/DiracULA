@@ -11,35 +11,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interactive shell over :mod:`archytaszx.repl.lang` and :mod:`archytaszx.repl.commands`:
-history, scripts and the console entry point.
+"""Interactive shell over :mod:`diracula.lang`: history, scripts and the console entry point.
 
-A :class:`Shell` owns one :class:`~archytaszx.repl.lang.Interpreter`, one
-:class:`~archytaszx.repl.commands.Session` and a notation mode. Each input line goes through
-:meth:`Shell.run_line`:
+A :class:`Shell` owns one :class:`~diracula.lang.Interpreter` and a notation mode. Each input
+line goes through :meth:`Shell.run_line`:
 
 * blank lines and ``#`` comment lines produce nothing and are not recorded;
 * ``history`` and ``quit``/``exit`` are handled here;
 * ``:dirac``, ``:zx`` (``:zxrender``), ``:zxunicode``, ``:zxascii``, ``:both`` and ``:raw``
-  pick what ``show``, verbose mode and engine commands print and how ZX diagrams are drawn,
+  pick what ``show`` and verbose mode print and how ZX diagrams are drawn,
   ``:listing`` toggles the graph listing under each drawing, ``:verbose_on``/``:verbose_off``
   switch verbose mode, ``:style`` names the display styles (render, unicode, ascii, latex;
   several print every output in each, in order) and ``:config`` shows or sets the image size
-  and colour;
-* any other line starting with ``:`` is an engine command, the rest of the line going to
-  :func:`~archytaszx.repl.commands.run` and its outcome printed by
-  :func:`~archytaszx.repl.commands.format_outcome` in the current mode;
-* every other line is a :mod:`~archytaszx.repl.lang` statement; ``show`` and ``print`` print.
+  and colour; ``:help`` lists the meta-commands;
+* every other line is a :mod:`~diracula.lang` statement; ``show`` and ``print`` print.
 
-With ``commands=True`` every line is an engine command, without the ``:``. In verbose mode the
-last statement of each line is echoed utop style (``val x : nat = 3``, ``- : ket = ...``) and,
-interactively, a ``─( time )─< command n >──{ dir }─`` bar precedes each prompt.
+In verbose mode the last statement of each line is echoed utop style (``val x : nat = 3``,
+``- : ket = ...``) and, interactively, a ``─( time )─< command n >──{ dir }─`` bar precedes
+each prompt.
 
 With ``order`` output is held until an error or the end, then printed one section per style.
 ``error:`` lines are red when colour is on. A line ending in ``\\`` is joined to the next one
 with a single space; a closed ``if`` waits
 for the next line in case it starts with ``else``. :func:`main` is the
-``archytaszx`` console script: ``-c`` commands and script files run non-interactively,
+``diracula`` console script: ``-c`` commands and script files run non-interactively,
 otherwise :meth:`Shell.loop` reads from standard input (prompt ``dir(n): ``, readline history
 on a terminal).
 """
@@ -54,12 +49,12 @@ import time
 from collections.abc import Iterable, Iterator, Sequence
 from typing import TextIO
 
-from archytaszx.repl import display as D
-from archytaszx.repl.commands import Outcome, Session, detail_text, format_outcome, run
-from archytaszx.repl.lang import Interpreter, LangError, incomplete, is_else, may_continue
-from archytaszx.repl.printer import DEFAULT_MODE, NotationMode
+from diracula import display as D
+from diracula import terminal as T
+from diracula.lang import Interpreter, LangError, incomplete, is_else, may_continue
+from diracula.zx.listing import DEFAULT_MODE, NotationMode
 
-HISTORY_FILE = "~/.archytaszx_history"
+HISTORY_FILE = "~/.diracula_history"
 """The readline history file, user-expanded."""
 
 ERROR = "error"
@@ -90,8 +85,29 @@ _VIEW_HELP = {
 }
 
 
+HELP = """\
+:dirac                 view Dirac notation
+:zx, :zxrender         view ZX diagrams drawn with matplotlib
+:zxunicode             view ZX diagrams on a Unicode grid
+:zxascii               view ZX diagrams on an ASCII grid
+:both                  view Dirac notation and the matplotlib ZX drawing
+:raw                   view full ZX graph listings
+:listing               toggle the graph listing under each ZX drawing
+:verbose_on            echo each line's value, utop style
+:verbose_off           stop echoing values
+:style S [S ...]       select the output styles: render, unicode, ascii, latex
+:config                show the image settings and the configuration file path
+:config KEY VALUE      set size (a positive number) or color ("auto" or a colour)
+:config save           write the settings to the configuration file
+:config reset          restore the default settings
+:help                  this list
+history                the numbered lines of this session
+quit, exit             leave the shell"""
+"""The text of ``:help``."""
+
+
 class Shell:
-    """A REPL session: engine :class:`Session`, notation mode, line history and error count."""
+    """A REPL session: interpreter, notation mode, line history and error count."""
 
     def __init__(
         self,
@@ -99,8 +115,6 @@ class Shell:
         mode: NotationMode = DEFAULT_MODE,
         zx_style: str = "matplot",
         unicode: bool = False,
-        session: Session | None = None,
-        commands: bool = False,
         display: str | None = None,
         seed: int | None = None,
         plotter: D.Plotter | None = None,
@@ -112,8 +126,8 @@ class Shell:
         styles: Sequence[str] = (),
         order: bool = False,
     ) -> None:
-        """Type checks: TypeError on a mode that is not a NotationMode, a non-bool unicode or
-        a session that is not a Session; ValueError on an unknown display style.
+        """Type checks: TypeError on a mode that is not a NotationMode or a non-bool unicode;
+        ValueError on an unknown display style.
 
         ``display`` defaults to ``unicode`` when ``unicode`` is set, else ``plot``; ``styles``
         (several display styles, each output rendered in all of them in order) overrides it;
@@ -126,12 +140,8 @@ class Shell:
             raise TypeError(f"mode must be a NotationMode, got {mode!r}")
         if not isinstance(unicode, bool):
             raise TypeError(f"unicode must be a bool, got {unicode!r}")
-        if session is not None and not isinstance(session, Session):
-            raise TypeError(f"session must be a Session, got {type(session).__name__}")
         self.mode = mode
         self.unicode = unicode
-        self.session = session if session is not None else Session()
-        self.commands = commands
         style = display if display is not None else ("unicode" if unicode else "plot")
         chosen = tuple(dict.fromkeys(styles)) or (style,)
         for each in chosen:
@@ -157,9 +167,7 @@ class Shell:
         """Lines of a language block whose ``{`` is not yet closed."""
         self.history: list[str] = []
         self.errors = 0
-        """Count of lines whose outcome had ``ok=False``, shell errors included."""
-        self.last_outcome: Outcome | None = None
-        """The outcome of the latest line sent to :func:`commands.run`."""
+        """Count of lines that failed."""
         self.done = False
         """Set by ``quit``/``exit``."""
 
@@ -188,7 +196,7 @@ class Shell:
             return self._block()
         if not text or text.startswith("#"):
             return []
-        language = not self.commands and not text.startswith(":")
+        language = not text.startswith(":")
         if language and (incomplete(text) or may_continue(text)):
             self.pending = [text]
             return self._block()
@@ -201,15 +209,14 @@ class Shell:
             return []
         if word == "history" and not rest:
             return _shared(self._history())
-        if not self.commands:
-            if not text.startswith(":"):
-                return self._statement(text)
-            text = text[1:].strip()
-            if not text:
-                return []
-            word, rest = (text.split(maxsplit=1) + [""])[:2]
-            word = word.lower()
-            rest = rest.strip()
+        if not text.startswith(":"):
+            return self._statement(text)
+        text = text[1:].strip()
+        if not text:
+            return []
+        word, rest = (text.split(maxsplit=1) + [""])[:2]
+        word = word.lower()
+        rest = rest.strip()
         if word in VIEWS and not rest:
             return _shared(self._mode(word))
         if word == "listing" and not rest:
@@ -223,35 +230,10 @@ class Shell:
             return [(ERROR if text.startswith("error:") else None, text)]
         if word == "style":
             return self._style(rest)
-        try:
-            outcome = run(self.session, text)
-        except KeyboardInterrupt:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            return self._internal(exc)
-        self.last_outcome = outcome
-        if not outcome.ok:
-            self.errors += 1
-        try:
-            if not outcome.ok:
-                return [(ERROR, self._outcome_text(outcome, self.interpreter.styles[0]))]
-            return [(st, self._outcome_text(outcome, st)) for st in self.interpreter.styles]
-        except KeyboardInterrupt:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            return self._internal(exc)
-
-    def _outcome_text(self, outcome: Outcome, style: str) -> str:
-        """An engine outcome in a display style: Unicode text in ``unicode`` style or under
-        ``unicode``, except in ``ascii`` style."""
-        unicode = style == "unicode" or (self.unicode and style != "ascii")
-        if outcome.ok and outcome.command == "detail" and unicode:
-            return detail_text(outcome.detail, unicode=True)
-        interp = self.interpreter
-        zx = "ascii" if style == "ascii" else interp.zx_style
-        return format_outcome(
-            outcome, self.mode, unicode=unicode, zx_style=zx, listing=interp.listing
-        )
+        if word == "help" and not rest:
+            return _shared(HELP)
+        self.errors += 1
+        return [(ERROR, f"error: unknown meta-command :{word}; :help lists them")]
 
     def _emit(self, parts: list[tuple[str | None, str]]) -> str:
         """Printable text of ``parts``: in order, each repeated style text once; under
@@ -370,7 +352,7 @@ class Shell:
         sink = sys.stdout if stdout is None else stdout
         interactive = _isatty(source)
         if interactive and "plot" in self.interpreter.styles:
-            D.prepare()
+            T.prepare()
         use_input = interactive and source is sys.stdin and sink is sys.stdout
         readline_module = _start_readline() if use_input else None
         try:
@@ -383,8 +365,6 @@ class Shell:
 
     def _repl(self, source: TextIO, sink: TextIO, interactive: bool, use_input: bool) -> int:
         """The body of :meth:`loop`; output errors propagate."""
-        if interactive and self.commands:
-            _write(sink, f"ArchytasZX shell, mode {self.mode.value}; type help for commands.\n")
         while not self.done:
             try:
                 try:
@@ -458,22 +438,22 @@ class Shell:
 
     def _config(self, rest: str) -> str:
         """``config`` lists the image settings; ``config KEY VALUE`` sets one, ``config save``
-        writes them to :func:`~archytaszx.repl.display.config_path`, ``config reset`` restores
+        writes them to :func:`~diracula.display.config_path`, ``config reset`` restores
         the defaults."""
         words = rest.split(maxsplit=1)
         try:
             if words == ["save"]:
-                return f"saved {D.save_config(D.CONFIG)}"
+                return f"saved {T.save_config(T.CONFIG)}"
             if words == ["reset"]:
-                D.CONFIG.size, D.CONFIG.color = D.Config().size, D.Config().color
+                T.CONFIG.size, T.CONFIG.color = T.Config().size, T.Config().color
             elif len(words) == 2:
-                D.set_config(D.CONFIG, words[0].lower(), words[1])
+                T.set_config(T.CONFIG, words[0].lower(), words[1])
             elif words:
                 raise ValueError("usage: config [KEY VALUE | save | reset]")
         except (ValueError, OSError) as exc:
             self.errors += 1
             return f"error: {exc}"
-        return f"size = {D.CONFIG.size:g}\ncolor = {D.CONFIG.color}\nfile: {D.config_path()}"
+        return f"size = {T.CONFIG.size:g}\ncolor = {T.CONFIG.color}\nfile: {T.config_path()}"
 
     def _paint(self, text: str, code: str) -> str:
         return f"\x1b[{code}m{text}\x1b[0m" if self.color else text
@@ -616,8 +596,8 @@ def _save_readline(module: object) -> None:
 
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="archytaszx",
-        description="ArchytasZX symbolic qufinite ZX-calculus shell.",
+        prog="diracula",
+        description="DiracULA, the Dirac Universal Language for Algorithm.",
         add_help=False,
     )
     parser.add_argument("--help", action="help", help="show this help message and exit")
@@ -649,9 +629,6 @@ def _argument_parser() -> argparse.ArgumentParser:
         "--order",
         action="store_true",
         help="hold output until an error or the end, then show it grouped by style",
-    )
-    parser.add_argument(
-        "--commands", action="store_true", help="read engine commands instead of the language"
     )
     parser.add_argument("--seed", type=int, default=None, help="seed for rand")
     saving = parser.add_mutually_exclusive_group()
@@ -691,7 +668,7 @@ def _argument_parser() -> argparse.ArgumentParser:
         "scripts",
         nargs="*",
         metavar="FILE|ARG",
-        help="script files (*.azx) to run; other values are arguments read by arg(k)",
+        help="script files (*.ula) to run; other values are arguments read by arg(k)",
     )
     return parser
 
@@ -700,7 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Console entry point.
 
     With ``-c`` or script files: runs the ``-c`` commands, then each file, in one session, and
-    returns 1 when any line had ``ok=False``, else 0; an unreadable file returns 2 before
+    returns 1 when any line failed, else 0; an unreadable file returns 2 before
     anything runs. With neither: the interactive :meth:`Shell.loop`. A usage error returns 2,
     a closed standard output 1, and Ctrl-C outside a command 130.
     """
@@ -709,20 +686,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 2)
     styles = tuple(args.styles or ())
-    paths = [p for p in args.scripts if args.commands or p.endswith(".azx")]
-    script_args = [p for p in args.scripts if not (args.commands or p.endswith(".azx"))]
+    paths = [p for p in args.scripts if p.endswith(".ula")]
+    script_args = [p for p in args.scripts if not p.endswith(".ula")]
     try:
-        D.CONFIG = D.load_config()
+        T.CONFIG = T.load_config()
     except ValueError as exc:
-        sys.stderr.write(f"archytaszx: {exc}; using the default display settings\n")
-    D.SAVE_DIR = args.images or args.images_white
-    D.SAVE_WHITE = args.images_white is not None
+        sys.stderr.write(f"diracula: {exc}; using the default display settings\n")
+    T.SAVE_DIR = args.images or args.images_white
+    T.SAVE_WHITE = args.images_white is not None
     mode, zx_style = VIEWS[args.mode]
     shell = Shell(
         mode=mode,
         zx_style=zx_style or "matplot",
         unicode="unicode" in styles,
-        commands=args.commands,
         seed=args.seed,
         args=script_args,
         verbose=args.verbose,
@@ -732,7 +708,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     drawn = mode is not NotationMode.DIRAC and zx_style == "matplot"
     if ("plot" in shell.interpreter.styles or drawn) and (paths or args.command):
-        D.prepare()
+        T.prepare()
     commands: list[str] = list(args.command)
     scripts: list[list[str]] = []
     for path in paths:
@@ -740,7 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             with open(path, encoding="utf-8") as handle:
                 scripts.append(handle.read().splitlines())
         except (OSError, UnicodeDecodeError) as exc:
-            sys.stderr.write(f"archytaszx: cannot read {path}: {exc}\n")
+            sys.stderr.write(f"diracula: cannot read {path}: {exc}\n")
             return 2
     _tolerant_streams()
     try:

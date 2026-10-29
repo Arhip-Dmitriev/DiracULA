@@ -11,10 +11,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Lean 4 certificates for results of the .azx language, by translation validation over the
-verified normaliser of symbolic sums with integer atoms (``ArchytasZX.LCanon``).
+"""Lean 4 certificates for results of the .ula language, by translation validation over the
+verified normaliser of symbolic sums with integer atoms (``DiracULA.LCanon``).
 
-The left side of a certificate is the program's structure (``ArchytasZX.Lang.Prog``), built
+The left side of a certificate is the program's structure (``DiracULA.Lang.Prog``), built
 from the syntax trees the interpreter keeps: every gate instance, literal state and identity
 is a leaf expression; applications, tensor products, scalar products, sums, inner products,
 conjugates and loops are ``Prog`` nodes whose meaning ``Prog.sem`` is a sum or product over
@@ -25,14 +25,15 @@ of the dimension symbols, parameters, functions and output registers.
 Variables: output register ``i`` is ``i``, input register ``i`` of a gate is ``IN + i``,
 parameter ``k`` is ``PAR + k``, summation indices start at ``BV`` and atoms at ``AID``.
 
-The functions under "the mirror" follow their Lean namesakes in ``ArchytasZX.Lang`` on the
-tuples of :mod:`archytaszx.semantics.lean_lsym`, so that :func:`cert_check` predicts
+The functions under "the mirror" follow their Lean namesakes in ``DiracULA.Lang`` on the
+tuples of :mod:`diracula.lean_lsym`, so that :func:`cert_check` predicts
 ``certCheck``.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -41,11 +42,10 @@ from typing import Any, cast
 
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.semantics import lean_lsym as Z
-from archytaszx.semantics import lean_sym as Y
-from archytaszx.semantics.lean_lsym import ATm, Atom
-from archytaszx.semantics.lean_net import NetUnsupported, _lake, lean_project
-from archytaszx.semantics.pathsum import State
+from diracula import lean_lsym as Z
+from diracula import lean_sym as Y
+from diracula.lean_lsym import ATm, Atom
+from diracula.pathsum import State
 
 IN = 1000
 PAR = 2000
@@ -461,7 +461,7 @@ class Vars:
                 raise CertifyError(f"the size {e} depends on {s}, which is not a dimension")
         try:
             return Y._dmon(e2, self.dsyms)
-        except NetUnsupported as exc:
+        except Y.SymUnsupported as exc:
             raise CertifyError(str(exc)) from exc
 
     def range_of(self, e: sympy.Expr, ctx: sympy.Expr | None) -> sympy.Expr:
@@ -557,7 +557,7 @@ class Vars:
     def atom_poly(self, f: sympy.Expr, ctx: sympy.Expr | None) -> Y.IPoly:
         """A function application as a polynomial: an atom, or a polynomial it equals under
         ``ctx``."""
-        from archytaszx.semantics import pathsum as P
+        from diracula import pathsum as P
 
         two = ctx is not None and sympy.expand(ctx - 2) == 0
         if isinstance(f, sympy.Mod):
@@ -735,7 +735,7 @@ class Reader:
         return v
 
     def eval(self, node: object, loc: Mapping[str, Slot]) -> sympy.Expr | Ket:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if isinstance(node, L.Num):
             return node.value
@@ -822,7 +822,7 @@ class Reader:
         return Ket((n,), a.dims, ((sympy.Integer(1), (), (sympy.Integer(0),)),))
 
     def ket(self, node: object, loc: Mapping[str, Slot]) -> Ket:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         assert isinstance(node, L.Braket)
         content = node.content.strip()
@@ -940,6 +940,17 @@ def state_terms(vs: Vars, s: State) -> list[ATm]:
 
 
 # checking
+
+
+def _lake() -> str | None:
+    found = shutil.which("lake")
+    home = os.path.expanduser("~/.elan/bin/lake")
+    return found or (home if os.path.exists(home) else None)
+
+
+def lean_project() -> str:
+    """The bundled Lean project's directory."""
+    return os.path.join(os.path.dirname(__file__), "lean")
 
 
 def check_file(path: str) -> tuple[bool, str]:
@@ -1066,7 +1077,7 @@ class Certifier:
     # the left side
 
     def kind(self, node: object) -> str:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if isinstance(node, L.Name):
             return "op" if node.id in self.trees or node.id == "I" else "scalar"
@@ -1093,7 +1104,7 @@ class Certifier:
 
     def named(self, node: object) -> bool:
         """Whether ``node`` reads a named state or applies an operator."""
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if isinstance(node, L.Braket):
             return self.is_state(node.content.strip())
@@ -1148,7 +1159,7 @@ class Certifier:
     def loop(self, ev: Event, index: int) -> tuple[Prog, Layout]:
         """A loop over a symbolic range whose body updates the state by operators applied to
         it: the loop node with the engine's invariant."""
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         body, var_sym, lo, hi, invariant = ev.nodes
         try:
@@ -1210,7 +1221,7 @@ class Certifier:
 
     def scalar_prog(self, node: object) -> Prog:
         """A scalar-valued tree."""
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if not self.named(node):
             return self.scalar_leaf(node)
@@ -1237,7 +1248,7 @@ class Certifier:
 
     def expr(self, node: object, want: Layout | None = None) -> tuple[Prog, Layout]:
         """A state-valued tree."""
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if not self.named(node):
             return self.leaf(node, want)
@@ -1288,7 +1299,7 @@ class Certifier:
 
     def op(self, node: object, lay: Layout) -> tuple[Prog, Layout]:
         """An operator-valued tree acting on registers of layout ``lay``."""
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if isinstance(node, L.Name) and node.id == "I":
             return self.ident(lay), lay
@@ -1312,7 +1323,7 @@ class Certifier:
     def power(self, node: object, lay: Layout) -> tuple[Prog, Layout]:
         """``U^@n`` on one register of width ``n``: the digit-wise kernel
         ``c^n ω_d^(α ddot(x, o))`` of a one-qudit kernel ``c ω_d^(α x o)``."""
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         assert isinstance(node, L.Bin)
         g = node.left
@@ -1373,14 +1384,14 @@ class Certifier:
         ), lay
 
     def factors(self, node: object) -> list[object]:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if isinstance(node, L.Bin) and node.op == "@":
             return self.factors(node.left) + self.factors(node.right)
         return [node]
 
     def span(self, node: object) -> int | None:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if isinstance(node, L.Bin) and node.op == "^@":
             return 1
@@ -1394,7 +1405,7 @@ class Certifier:
         return None
 
     def op_tensor(self, fs: list[object], lay: Layout) -> tuple[Prog, Layout]:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         n = len(lay[0])
         if len(fs) == 1:
@@ -1427,7 +1438,7 @@ class Certifier:
         return self.declare(key, "ident", f"I on {len(lay[0])} register(s)", p)
 
     def gate(self, name: str, lay: Layout) -> tuple[Prog, Layout]:
-        from archytaszx.repl import lang as L
+        from diracula import lang as L
 
         if name not in self.trees:
             raise CertifyError(f"{name} is not a gate")
@@ -1934,7 +1945,7 @@ class Certifier:
         pwok = f"(pwOK V{sep}{args_text})"
         lines = [
             "/-",
-            f"  ArchytasZX certificate: {what} of {self.script}.azx",
+            f"  DiracULA certificate: {what} of {self.script}.ula",
             "  The program's meaning (Prog.sem) equals the stated value for every value of the",
             "  dimension and width symbols, parameters, functions and output registers.",
             "  Variables: output register i is ν i, gate input register i is ν (IN + i)"
@@ -1942,9 +1953,9 @@ class Certifier:
             + (f"; {funcs}" if funcs else "")
             + ".",
             "-/",
-            "import ArchytasZX.Lang",
+            "import DiracULA.Lang",
             "",
-            "open ArchytasZX.Sym ArchytasZX.LSym ArchytasZX.Lang",
+            "open DiracULA.Sym DiracULA.LSym DiracULA.Lang",
             "",
             "set_option linter.unusedVariables false",
             "set_option linter.unusedTactic false",

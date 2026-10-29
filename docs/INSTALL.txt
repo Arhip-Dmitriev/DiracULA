@@ -1,9 +1,9 @@
-ARCHYTASZX DOCUMENTATION
-========================
+DIRACULA DOCUMENTATION
+======================
 
 Installation and Configuration
 
-Applies to: ArchytasZX 0.19.x
+Applies to: DiracULA 0.1.x
 
 
 1. REQUIREMENTS
@@ -14,7 +14,7 @@ Applies to: ArchytasZX 0.19.x
   Python        3.12 or later.
   Required      numpy, sympy (installed automatically).
   Optional      matplotlib, for typeset output and drawn ZX diagrams.
-  Optional      Lean 4 (via elan) and Mathlib, to re-check exported proofs.
+  Optional      Lean 4 (via elan) and Mathlib, to check certificates.
   Terminal      Any. Inline images need a terminal with the kitty, iTerm2 or sixel image
                 protocol; other terminals receive Unicode text.
 
@@ -24,22 +24,22 @@ Applies to: ArchytasZX 0.19.x
 
 2.1 From PyPI
 
-    pip install archytaszx
+    pip install DiracULA
 
-The distribution is named ArchytasZX; the package index normalises the name, so archytaszx and
-ArchytasZX refer to the same distribution. The importable package is archytaszx.
+The package index normalises the name, so diracula and DiracULA refer to the same
+distribution. The importable package is diracula.
 
 2.2 With the drawing extra
 
-    pip install 'archytaszx[viz]'
+    pip install 'DiracULA[viz]'
 
 This adds matplotlib. Without it every output style that needs matplotlib (the default
 "render" style and the "zxrender" view) falls back to Unicode text; nothing else changes.
 
 2.3 From a source checkout
 
-    git clone https://github.com/Arhip-Dmitriev/ArchytasZX.git
-    cd ArchytasZX
+    git clone https://github.com/Arhip-Dmitriev/DiracULA.git
+    cd DiracULA
     python -m venv .venv
     source .venv/bin/activate
     pip install -e '.[dev]'
@@ -48,8 +48,8 @@ The dev extra adds pytest, pytest-xdist, ruff and mypy.
 
 2.4 Verifying the installation
 
-    archytaszx --help
-    archytaszx -c 'var n' -c 'show(H^@n |0>^@n)' --unicode
+    diracula --help
+    diracula -c 'var n' -c 'show(H^@n |0>^@n)' --unicode
 
 The second command prints
 
@@ -61,13 +61,13 @@ or an equivalent closed form.
 3. INSTALLING THE LEAN LIBRARY
 ------------------------------
 
-The Lean 4 library is bundled inside the package, in the directory lean/ next to the package's
-__init__.py. Its location is printed by
+The Lean 4 library DiracULA is bundled inside the package, in the directory lean/ next to the
+package's __init__.py. Its location is printed by
 
-    python -c "import archytaszx, os; print(os.path.join(os.path.dirname(archytaszx.__file__), 'lean'))"
+    python -c "import diracula, os; print(os.path.join(os.path.dirname(diracula.__file__), 'lean'))"
 
-In a source checkout it is archytaszx/lean. The library pins its toolchain in lean-toolchain
-(Lean 4.35.0) and depends on Mathlib at the matching revision.
+In a source checkout it is diracula/lean. It pins its toolchain in lean-toolchain (Lean
+4.35.0) and depends on Mathlib at the matching revision.
 
 To build it once:
 
@@ -76,12 +76,11 @@ To build it once:
     3. lake exe cache get      (downloads prebuilt Mathlib)
     4. lake build
 
-An exported proof is then checked with
+A certificate is then checked with
 
-    lake env lean /path/to/proof.lean
+    lake env lean /path/to/certificate.lean
 
-run from the same directory. From Python, archytaszx.semantics.lean_net.check(source, path)
-writes and checks a proof in one call. See LEAN.txt.
+run from the same directory, or by the --check option of the diracula command (SHELL.txt).
 
 
 4. CONFIGURATION
@@ -91,9 +90,9 @@ writes and checks a proof in one call. See LEAN.txt.
 
 Image settings are read at start-up from
 
-    $XDG_CONFIG_HOME/archytaszx/config.toml
+    $XDG_CONFIG_HOME/diracula/config.toml
 
-or ~/.config/archytaszx/config.toml when XDG_CONFIG_HOME is unset. The file is TOML with two
+or ~/.config/diracula/config.toml when XDG_CONFIG_HOME is unset. The file is TOML with two
 keys:
 
   Key    Type     Default  Meaning
@@ -106,21 +105,21 @@ The file is created and changed from the shell with the :config meta-command (SH
 
 4.2 History file
 
-The interactive shell keeps up to 1000 lines of history in ~/.archytaszx_history when standard
+The interactive shell keeps up to 1000 lines of history in ~/.diracula_history when standard
 input is a terminal.
 
 4.3 Environment variables
 
   Variable                Effect
   ----------------------  -----------------------------------------------------------------
-  XDG_CONFIG_HOME         Directory holding archytaszx/config.toml.
-  ARCHYTASZX_IMAGES       Forces the image protocol: kitty, iterm, sixel or none. Without
+  XDG_CONFIG_HOME         Directory holding diracula/config.toml.
+  DIRACULA_IMAGES         Forces the image protocol: kitty, iterm, sixel or none. Without
                           it the protocol is detected from TERM, TERM_PROGRAM,
                           KITTY_WINDOW_ID and LC_TERMINAL, and is "none" when standard
                           output is not a terminal.
-  ARCHYTASZX_IMAGE_THEME  dark or light: the background assumed for images. Without it,
+  DIRACULA_IMAGE_THEME  dark or light: the background assumed for images. Without it,
                           COLORFGBG is consulted, and the default is dark.
-  ARCHYTASZX_IMAGE_FG     Foreground colour of images, overriding the terminal's own.
+  DIRACULA_IMAGE_FG       Foreground colour of images, overriding the terminal's own.
   NO_COLOR                When set and non-empty, error lines are not coloured.
 
 
@@ -129,18 +128,15 @@ input is a terminal.
 
 From a source checkout with the dev extra installed:
 
-    python -m pytest -n 8        default tier
-    python -m pytest -m slow     fuzz sweeps and oracle differentials
-    python -m pytest -m ""       both tiers
-    ruff format . && ruff check . && mypy archytaszx
+    python -m pytest -n 8
+    ruff format . && ruff check . && mypy diracula
 
-The default tier deselects the tests marked slow. -n 8 runs the tests on eight workers through
-pytest-xdist.
+-n 8 runs the tests on eight workers through pytest-xdist.
 
 
 6. UNINSTALLING
 ---------------
 
-    pip uninstall archytaszx
+    pip uninstall DiracULA
 
 The configuration file and the history file are not removed; delete them by hand if wanted.

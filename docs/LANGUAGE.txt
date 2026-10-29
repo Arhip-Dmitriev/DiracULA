@@ -1,11 +1,11 @@
-ARCHYTASZX DOCUMENTATION
-========================
+DIRACULA DOCUMENTATION
+======================
 
-The .azx Language Reference
+The .ula Language Reference
 
-Applies to: ArchytasZX 0.19.x
-Implementation: archytaszx.repl.lang (parser and interpreter),
-                archytaszx.semantics.pathsum (values), archytaszx.repl.display (output)
+Applies to: DiracULA 0.1.x
+Implementation: diracula.lang (parser and interpreter),
+                diracula.pathsum (values), diracula.display (output)
 
 
 CONTENTS
@@ -35,14 +35,14 @@ CONTENTS
 1. INTRODUCTION
 ---------------
 
-The .azx language is Dirac notation made executable. A program declares symbols, defines
+The .ula language is Dirac notation made executable. A program declares symbols, defines
 functions and gates, builds states, applies gates to them, measures them and prints the
 results. Every value is exact and may depend on symbols; in particular the number of qudits in
 a register and the dimension of a qudit may be symbols, and the printed result is then a closed
 form valid for every value of those symbols.
 
-Programs are run by the archytaszx command (SHELL.txt), either from a file with the extension
-.azx or interactively, or from Python (PYTHON_API.txt). The guided tour examples/learn_azx.azx
+Programs are run by the diracula command (SHELL.txt), either from a file with the extension
+.ula or interactively, or from Python (PYTHON_API.txt). The guided tour examples/learn_ula.ula
 exercises every construct described here.
 
 
@@ -524,7 +524,7 @@ records a fact about symbols, which later simplifications may use. A condition t
 concretely false is an error. A divisibility assumption a % b == 0 lets the engine treat a/b
 as an integer when it closes the geometric sums of a state, an inner product or a
 measurement, bounds their indices, and simplifies floor and % of measured outcomes
-(examples/shor.azx).
+(examples/shor.ula).
 
 A bound x < b, x <= b, x > b or x >= b on a symbol x gives x that range. A value |x> then
 lies inside a sum over 0..b-1 or a character sum over 0..b-1, and two values that differ
@@ -542,7 +542,7 @@ floor, % and bit of it meet a sum.
     assert CONDITION
 
 is an error unless the condition holds. A symbolic condition that cannot be decided also
-counts as a failure. In a script, a failed assertion makes the archytaszx command exit with
+counts as a failure. In a script, a failed assertion makes the diracula command exit with
 status 1.
 
 
@@ -552,7 +552,7 @@ status 1.
 
 writes, for each name, a Lean 4 file stating and proving that the value the program computes
 for NAME equals the closed form the engine prints, for every value of the size symbols,
-parameters and output registers (LEAN.txt, section 7). NAME is a state, a scalar variable or
+parameters and output registers (LEAN.txt). NAME is a state, a scalar variable or
 a variable holding a measured distribution. The file is <script>_<name>.lean next to the
 script, or in the directory given by --certify (SHELL.txt, section 3.5), with s_ before a
 script name that does not begin with a letter; a name certified again gets a numbered file. One line is printed per name:
@@ -563,7 +563,7 @@ A result outside the certified fragment is an error, "cannot certify NAME: REASO
 never certified incorrectly. The following cannot be certified: rand, a while or if whose
 condition depends on a value that is not concrete, normalise, floating-point format specs,
 states assigned from Python, and results whose proof needs an identity the normaliser does
-not prove (LEAN_GAPS.txt).
+not prove.
 
 Every assume statement becomes a hypothesis of each certificate written after it. Under
 --certify, an assert passes only when the certificate of its equation is written.
@@ -646,7 +646,7 @@ only; a later application to a register of another size binds again.
 
 Errors are reported as one line beginning with "error:" and do not end an interactive session.
 In a script, the line in error is skipped, the error is reported, and execution continues with
-the next line; the archytaszx command then exits with status 1. Typical messages:
+the next line; the diracula command then exits with status 1. Typical messages:
 
     error: 'foo' is not defined; declare it with var
     error: cannot add a ket and a scalar
@@ -656,7 +656,7 @@ the next line; the archytaszx command then exits with status 1. Typical messages
     error: assertion failed: x == 2
 
 The interpreter raises LangSyntaxError for text that does not parse, LangTypeError for a value
-of the wrong kind, and LangError for any other statement that cannot be executed (ERRORS.txt).
+of the wrong kind, and LangError for any other statement that cannot be executed.
 
 
 19. COMPLETE EXAMPLE
@@ -678,4 +678,4 @@ Output (unicode style):
     z = [(1, 1)]
 
 The first register reads 1 with probability 1 for every n: the oracle is balanced.
-examples/deutsch_jozsa.azx shows every intermediate state.
+examples/deutsch_jozsa.ula shows every intermediate state.

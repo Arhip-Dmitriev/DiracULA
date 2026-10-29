@@ -1,29 +1,27 @@
-ARCHYTASZX DOCUMENTATION
-========================
+DIRACULA DOCUMENTATION
+======================
 
-The archytaszx Command and Shell
+The diracula Command and Shell
 
-Applies to: ArchytasZX 0.19.x
-Implementation: archytaszx.repl.shell
+Applies to: DiracULA 0.1.x
+Implementation: diracula.shell
 
 
 1. SYNOPSIS
 -----------
 
-    archytaszx [OPTIONS]                          interactive shell
-    archytaszx [OPTIONS] FILE.azx ... [ARG ...]   run scripts
-    archytaszx [OPTIONS] -c STATEMENT [-c ...]    run statements given on the command line
+    diracula [OPTIONS]                          interactive shell
+    diracula [OPTIONS] FILE.ula ... [ARG ...]   run scripts
+    diracula [OPTIONS] -c STATEMENT [-c ...]    run statements given on the command line
 
 
 2. OPERANDS
 -----------
 
-Positional operands ending in .azx are script files. They are run in the order given, in one
+Positional operands ending in .ula are script files. They are run in the order given, in one
 session, after every -c statement. Every other positional operand is a script argument,
 available to programs through arg(K) (LANGUAGE.txt, section 15), counted from 1 in the order
 given.
-
-With --commands, every positional operand is a file of engine commands.
 
 When neither a -c option nor a script file is given, the interactive shell starts.
 
@@ -36,14 +34,12 @@ When neither a -c option nor a script file is given, the interactive shell start
   --help                 Print the usage summary and exit.
   -c CMD, --command CMD  Run CMD as one line. Repeatable; the lines run in order, before any
                          script file.
-  --commands             Read engine commands instead of language statements: every line
-                         is an engine command, written without the leading colon.
   --seed SEED            Seed the generator used by rand.
   --verbose              Echo the value of each line, in the style "val x : nat = 3".
 
 3.2 Views
 
-The view decides how states, and the diagrams engine commands print, are shown. Exactly one
+The view decides how states are shown. Exactly one
 may be given; the default is --dirac.
 
   --dirac,     -dirac      Dirac notation.
@@ -79,7 +75,7 @@ The two options below are mutually exclusive.
 
 3.5 Certificates
 
-  --certify DIR  Write a Lean certificate (LEAN.txt, section 7) of every value a show
+  --certify DIR  Write a Lean certificate (LEAN.txt) of every value a show
                  statement prints and of every assert into DIR, one file per result named
                  <script>_<name>.lean. Each certificate is reported on one line,
                  "lean: wrote FILE (N axioms: NAMES)"; a result that cannot be certified is
@@ -126,8 +122,7 @@ Each input line is handled as follows:
   - A blank line or a line starting with # does nothing and is not recorded.
   - history lists the lines entered in this session.
   - quit or exit leaves the shell (as does end of input).
-  - A line starting with : is a meta-command (section 6) or an engine command
-    (ENGINE_COMMANDS.txt).
+  - A line starting with : is a meta-command (section 6).
   - Any other line is a language statement (LANGUAGE.txt).
 
 A line ending in a backslash is joined to the next. A block opened with { continues until its
@@ -137,13 +132,12 @@ else.
 5.3 History
 
 On a terminal, line editing and history are provided by readline. The history persists across
-sessions in ~/.archytaszx_history, at most 1000 lines.
+sessions in ~/.diracula_history, at most 1000 lines.
 
 5.4 Errors
 
 Errors are printed as lines beginning with "error:", in red when colour is enabled (standard
-output is a terminal and NO_COLOR is not set). After a failed engine command,
-the ":detail" command shows the engine's full error record.
+output is a terminal and NO_COLOR is not set).
 
 
 6. META-COMMANDS
@@ -169,10 +163,9 @@ Meta-commands change the shell's own settings. They begin with a colon.
                          a matplotlib colour).
   :config save           Write the settings to the configuration file.
   :config reset          Restore the default settings.
-  :help [CMD]            List every command, or show one command's usage.
+  :help                  List the meta-commands.
 
-Any other line beginning with a colon is passed, without the colon, to the engine; see
-ENGINE_COMMANDS.txt.
+Any other line beginning with a colon is an error, "unknown meta-command".
 
 
 7. VERBOSE MODE
@@ -193,20 +186,13 @@ for an operator value, gate for a gate definition and func for a function defini
 8. SCRIPTS
 ----------
 
-A script file is UTF-8 text in the .azx language. It may contain meta-commands and engine
-commands (lines starting with a colon) as well as statements, so a script can switch views,
-load diagrams and run proofs. Scripts given together share one session: names defined by an
-earlier script are visible to a later one.
+A script file is UTF-8 text in the .ula language. It may contain meta-commands (lines
+starting with a colon) as well as statements, so a script can switch views. Scripts given
+together share one session: names defined by an earlier script are visible to a later one. A
+line ending in a backslash continues on the next line:
 
-Example, examples/deutsch_jozsa_proof.azx, consists of engine commands only. A line ending in
-a backslash continues on the next line:
-
-    :load count n; dim d; z = X(0 -> 1, d); box q x n nodes z; \
-      t = Z(0 -> 1, d) phase{k: -k/d}; e = Z(1 -> 0, d) phase{k: k/d}; scalar d^(-(n+1)/2)
-    :name out_const
-    :load count n; dim d; z = X(0 -> 1, d); g1 = F(1 -> 1, d); ... ; inputs u.in1; ...
-    :decide against @out_const
-    :certificate lean deutsch_jozsa_constant.lean
+    gate U_f = |x>|y> -> \
+      |x>|y xor bit(x, 0)>
 
 
 9. TERMINAL IMAGES
@@ -214,6 +200,6 @@ a backslash continues on the next line:
 
 Rendered output is shown inline in terminals implementing the kitty graphics protocol, the
 iTerm2 inline image protocol, or sixel; the protocol is detected from the environment, or
-forced with ARCHYTASZX_IMAGES (INSTALL.txt, section 4.3). Where no protocol is available, or
+forced with DIRACULA_IMAGES (INSTALL.txt, section 4.3). Where no protocol is available, or
 standard output is not a terminal, rendered output is replaced by Unicode text. Image size and
 colour are set by the configuration file (INSTALL.txt, section 4.1).

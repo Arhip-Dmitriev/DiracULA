@@ -1,24 +1,23 @@
-ARCHYTASZX DOCUMENTATION
-========================
+DIRACULA DOCUMENTATION
+======================
 
 The ZX View: Language States as Diagrams
 
-Applies to: ArchytasZX 0.19.x
-Modules: archytaszx.repl.zxview, archytaszx.repl.zxsym, archytaszx.repl.zxdraw,
-         archytaszx.repl.printer
+Applies to: DiracULA 0.1.x
+Modules: diracula.zxview, diracula.zxsym, diracula.zx.draw, diracula.zx.listing
 
 
 1. PURPOSE
 ----------
 
-Any state or density matrix of the .azx language can be shown as a ZXW diagram (views --zx,
+Any state or density matrix of the .ula language can be shown as a ZXW diagram (views --zx,
 --zxunicode, --zxascii, --both and --raw; SHELL.txt, section 3.2). The diagram is built from
 the structure of the path sum, not from its amplitudes, so a state of symbolic size has a
 diagram of fixed size: the same graph for every value of the size symbols, with bang boxes
 carrying the symbolic counts.
 
 
-2. TRANSLATION OF ONE TERM (archytaszx.repl.zxsym)
+2. TRANSLATION OF ONE TERM (diracula.zxsym)
 --------------------------------------------------
 
 A path-sum term is an amplitude times a sum over bound indices of register values. It is
@@ -50,7 +49,7 @@ An amplitude outside the scalar and phase grammar, such as cos(t) of a real symb
 ZX form; the view prints "no ZX form (reason)".
 
 
-3. SUMS OF TERMS AND LITERAL VECTORS (archytaszx.repl.zxview)
+3. SUMS OF TERMS AND LITERAL VECTORS (diracula.zxview)
 -------------------------------------------------------------
 
 Several terms of a concrete state are summed exactly by a selector: a W node fans
@@ -73,8 +72,8 @@ A state with no structural translation raises ZXViewError; the shell then report
 state has no ZX diagram.
 
 
-4. DRAWING (archytaszx.repl.zxdraw)
------------------------------------
+4. DRAWING (diracula.zx.draw)
+-----------------------------
 
 The layout places nodes in columns by their distance from the outputs, outputs rightmost,
 splits wires that skip columns with dummy points, and orders each column by barycentre sweeps
@@ -90,31 +89,5 @@ Three renderers share the layout:
   ascii     the same in ASCII, spiders as (Z ..) and (X ..), crossings as +
 
 Long phase rules are listed in a legend. Boundary wires are labelled out i, or ket i and bra i
-for a density matrix. With :listing the graph listing (ENGINE_COMMANDS.txt, section 3.3) is
+for a density matrix. With :listing the graph listing (diracula.zx.listing.render_graph) is
 printed under each drawing; the raw view prints only the listing, nothing summarised.
-
-
-5. DIRAC RENDERING OF ENGINE DIAGRAMS (archytaszx.repl.printer)
----------------------------------------------------------------
-
-In the opposite direction, engine diagrams are printed in Dirac notation by reading each
-diagram into its structural index sum, one bound index per spider, without contracting or
-rewriting. A diagram each of whose connected components is one bare generator is also named
-from a catalog (GHZ_{n}, copy_{n}, W_{n}, Z_{m->n}(phases), X_{m->n}, F, plus, zero, id,
-triangle, bind, split). Per generator, matching the denotation axis for axis:
-
-  Z    every leg carries the spider index k, weighted e^{2 pi i alpha(k)}
-  X    d^{-(m+n)/2} sum_q e^{2 pi i alpha(q)} omega_d^{q (sum outs - sum ins)}
-  F    d^{-1/2} omega_d^{o i}
-  T    [o = 0 or o = i]
-  Ti   [o = i] - [o = 0][i >= 1]
-  W    [in = sum outs][at most one output nonzero]
-  B, S [ab = a*t + b]
-
-A node inside node-scope boxes has its indices and factor taken once per copy, written with
-copy indices i0 = 1..n; a fanned leg is one leg per copy, laid out copy-major. Output is ASCII
-by default, Unicode with unicode=True:
-
-    render(state, mode, *, unicode=False)     a state in a notation mode
-    render_graph(diagram)                     the graph listing
-    dirac_term(diagram), render_term(term), recognize(diagram)

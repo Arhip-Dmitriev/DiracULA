@@ -1,0 +1,50 @@
+# Copyright 2026 Arkhip A. Dmitriev
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+cff-version: 1.2.0
+title: "DiracULA: Dirac Universal Language for Algorithm"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Dmitriev
+    given-names: Arkhip Alekseyevich
+repository-code: "https://github.com/Arhip-Dmitriev/DiracULA"
+url: "https://github.com/Arhip-Dmitriev/DiracULA"
+abstract: >-
+  A programming language for developing quantum algorithms without fixing the
+  qudit count or dimension. Programs are written in Dirac notation and evaluated
+  on symbolic path sums: states, Born distributions and post-measurement states
+  are derived as closed forms that hold for every size, never by simulation.
+  Results can be certified in Lean 4 and Mathlib by a verified normaliser of
+  symbolic sums, and any state can be viewed as a qufinite ZXW diagram through
+  the ArchytasZX engine.
+keywords:
+  - dirac notation
+  - quantum algorithms
+  - quantum programming language
+  - quantum computing
+  - qudit
+  - symbolic quantum
+  - path sums
+  - symbolic algebra
+  - formal verification
+  - lean
+references:
+  - type: software
+    title: "ArchytasZX"
+    authors:
+      - family-names: Dmitriev
+        given-names: Arkhip Alekseyevich
+    url: "https://github.com/Arhip-Dmitriev/ArchytasZX"
+license: Apache-2.0
+version: 0.1.0

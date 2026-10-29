@@ -1,11 +1,12 @@
-from archytaszx import azx, Program
-azx("var n")
-azx.psi = azx.H ** azx.n | azx.ket(0) ** azx.n
-print(azx.psi)
-azx["|phi>"] = azx["|psi> - 2 |0><0|psi>"]
-print(azx.phi)
-print(azx.phi.latex())
-y = azx.measure | azx.psi
+from diracula import Program, ula
+
+ula("var n")
+ula.psi = ula.H**ula.n | ula.ket(0) ** ula.n
+print(ula.psi)
+ula["|phi>"] = ula["|psi> - 2 |0><0|psi>"]
+print(ula.phi)
+print(ula.phi.latex())
+y = ula.measure | ula.psi
 print(y)
 p = Program()
 p("|b> = CNOT (H @ I) |0>|0>")
@@ -22,5 +23,5 @@ print(q["<s|s>"])
 q("gate CZ = |a>|b> -> (-1)^(a*b) |a>|b>")
 print(q["CZ (|+> @ |+>)"])
 print(q.CZ)
-print(float(q["<s|s>"]) if hasattr(q["<s|s>"], '__float__') else 'no float')
+print(float(q["<s|s>"]) if hasattr(q["<s|s>"], "__float__") else "no float")
 print(repr(q["<s|s>"]))

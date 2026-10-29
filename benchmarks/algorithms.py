@@ -93,7 +93,7 @@ def supports(case: dict) -> str | None:
 
 
 def _archytaszx(case: dict, repeat: int) -> dict:
-    from archytaszx import Program
+    from diracula import Program
 
     src = f"var n = {case['n']}, d = {case['d']}\n{SCRIPTS[case['family']]}\nshow(|p>)"
     holder: list[Program] = []

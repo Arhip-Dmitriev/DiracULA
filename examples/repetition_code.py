@@ -4,19 +4,19 @@ symbolic code distance n + 1: CNOTs from the logical qubit onto n ancillas in |0
 Run:  python examples/repetition_code.py
 """
 
-from archytaszx import Program
+from diracula import Program
 
-azx = Program()
-n = azx.var("n")
-a, b = azx.var("a", "b", type="complex")
-azx("gate CX = |c>|y> -> |c>|y xor c*2^j>")  # CNOT onto ancilla j
+ula = Program()
+n = ula.var("n")
+a, b = ula.var("a", "b", type="complex")
+ula("gate CX = |c>|y> -> |c>|y xor c*2^j>")  # CNOT onto ancilla j
 
-azx.enc = (a * azx.ket(0) + b * azx.ket(1)) @ azx.ket(0) ** n
-azx("for j in 0..n { |enc> = CX |enc> }")
-azx.show(azx.enc)
+ula.enc = (a * ula.ket(0) + b * ula.ket(1)) @ ula.ket(0) ** n
+ula("for j in 0..n { |enc> = CX |enc> }")
+ula.show(ula.enc)
 
-azx.want = a * azx.ket(0) @ azx.ket(0) ** n + b * azx.ket(1) @ azx.ket(1) ** n
-norm = (azx.want.dag() | azx.want).sympy()
-assert (azx.want.dag() | azx.enc).sympy() == norm
-assert (azx.enc.dag() | azx.enc).sympy() == norm
+ula.want = a * ula.ket(0) @ ula.ket(0) ** n + b * ula.ket(1) @ ula.ket(1) ** n
+norm = (ula.want.dag() | ula.want).sympy()
+assert (ula.want.dag() | ula.enc).sympy() == norm
+assert (ula.enc.dag() | ula.enc).sympy() == norm
 print("the encoder maps a|0> + b|1> to a|0...0> + b|1...1>, for every distance")

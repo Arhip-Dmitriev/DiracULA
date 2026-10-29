@@ -1,4 +1,4 @@
-I want these example in as basic python with azx import and .azx scripts, and attempted in Qiskit, PyZX, and Quantomatic.
+I want these example in as basic python with ula import and .ula scripts, and attempted in Qiskit, PyZX, and Quantomatic.
 
 1.  Prove CNOT Ladder vs fanout for symbolic n and D
 2.  prove the output of deutsch Jozsa over Z_d^N

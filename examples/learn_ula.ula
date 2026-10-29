@@ -1,5 +1,5 @@
-# A guided tour of the .azx language, ending in Deutsch-Jozsa for a symbolic number of qubits.
-# Run:  archytaszx examples/learn_azx.azx
+# A guided tour of the .ula language, ending in Deutsch-Jozsa for a symbolic number of qubits.
+# Run:  diracula examples/learn_ula.ula
 #
 # '#' starts a comment. Statements end at a newline or ';'. A trailing '\' joins two lines.
 

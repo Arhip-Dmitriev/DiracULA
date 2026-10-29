@@ -4,22 +4,22 @@ H^@n X^a Z^b H^@n = Z^a X^b.
 Run:  python examples/pauli_through_hadamard.py
 """
 
-from archytaszx import Program
+from diracula import Program
 
-azx = Program()
-n = azx.var("n", "x", "a", "b")[0]
-azx("gate XA = |y> -> |y xor a>")
-azx("gate ZB = |y> -> (-1)^dot(y, b) |y>")
-azx("gate XB = |y> -> |y xor b>")
-azx("gate ZA = |y> -> (-1)^dot(y, a) |y>")
+ula = Program()
+n = ula.var("n", "x", "a", "b")[0]
+ula("gate XA = |y> -> |y xor a>")
+ula("gate ZB = |y> -> (-1)^dot(y, b) |y>")
+ula("gate XB = |y> -> |y xor b>")
+ula("gate ZA = |y> -> (-1)^dot(y, a) |y>")
 
-azx.zeros = azx.ket(0) ** n
-azx.w = azx["0 |zeros> + |x>"]  # an arbitrary basis state
+ula.zeros = ula.ket(0) ** n
+ula.w = ula["0 |zeros> + |x>"]  # an arbitrary basis state
 
-hn = azx.H**n
-azx.lhs = hn | (azx.XA | (azx.ZB | (hn | azx.w)))
-azx.rhs = azx.ZA | (azx.XB | azx.w)
-azx.show(azx.rhs)
-assert (azx.rhs.dag() | azx.lhs).sympy() == 1
-assert (azx.rhs.dag() | azx.rhs).sympy() == 1
+hn = ula.H**n
+ula.lhs = hn | (ula.XA | (ula.ZB | (hn | ula.w)))
+ula.rhs = ula.ZA | (ula.XB | ula.w)
+ula.show(ula.rhs)
+assert (ula.rhs.dag() | ula.lhs).sympy() == 1
+assert (ula.rhs.dag() | ula.rhs).sympy() == 1
 print("H^@n X^a Z^b H^@n = Z^a X^b, for every n")

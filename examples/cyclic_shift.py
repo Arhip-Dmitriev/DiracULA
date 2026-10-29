@@ -4,20 +4,20 @@ and d. On a value x < d^n - 1 the shift is x -> d x mod (d^n - 1); d^n - 1 is fi
 Run:  python examples/cyclic_shift.py
 """
 
-from archytaszx import Program
+from diracula import Program
 
-azx = Program()
-azx.var("n", "d", "x")
-azx("var M = d^n - 1")
-azx("func rot(y) = ifelse(y < M, (y*d) % M, y)")
-azx("gate ROT = |y> -> |rot(y)>")
+ula = Program()
+ula.var("n", "d", "x")
+ula("var M = d^n - 1")
+ula("func rot(y) = ifelse(y < M, (y*d) % M, y)")
+ula("gate ROT = |y> -> |rot(y)>")
 
-azx("|zeros>_d = |0>_d^@n")
-azx("|s>_d = 0 |zeros> + |x>")
-azx("|x0>_d = 0 |zeros> + |x>")
-azx.show(azx.ROT | azx.s)
+ula("|zeros>_d = |0>_d^@n")
+ula("|s>_d = 0 |zeros> + |x>")
+ula("|x0>_d = 0 |zeros> + |x>")
+ula.show(ula.ROT | ula.s)
 
-azx("for j in 0..n { |s> = ROT |s> }")
-azx.show(azx.s)
-assert (azx.x0.dag() | azx.s).sympy() == 1
+ula("for j in 0..n { |s> = ROT |s> }")
+ula.show(ula.s)
+assert (ula.x0.dag() | ula.s).sympy() == 1
 print("ROT^n = I, for every n and d")

@@ -14,10 +14,10 @@
 """Generator denotations: the tensor formula for each generator type at a concrete dimension.
 
 The one leaf the rest of the semantics layer calls for "what does a single node mean".
-:mod:`archytaszx.semantics.contract_numeric` is the only other module allowed to build on it.
+:mod:`tests.zxoracle.contract_numeric` is the only other module allowed to build on it.
 
-Axis convention (shared with :mod:`archytaszx.semantics.contract_numeric` and
-:mod:`archytaszx.semantics.check`; stated once here). A node with ``m`` inputs and ``n`` outputs
+Axis convention (shared with :mod:`tests.zxoracle.contract_numeric`; stated once here). A node
+with ``m`` inputs and ``n`` outputs
 denotes a rank-``m + n`` tensor whose axes are outputs first in ``Node.outputs`` order,
 then inputs in ``Node.inputs`` order; axis ``i`` has length that port's ``Dim.to_int()``. A
 diagram's boundary follows the same rule. Every consumer must agree with it.
@@ -59,9 +59,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from archytaszx.algebra.dimension import Dim
-from archytaszx.algebra.phase import Phase
-from archytaszx.diagram.generators import (
+from diracula.zx.dimension import Dim
+from diracula.zx.generators import (
     DIM_BINDER,
     DIM_SPLITTER,
     FOURIER_BOX,
@@ -73,7 +72,8 @@ from archytaszx.diagram.generators import (
     Z_SPIDER,
     DimensionPolicy,
 )
-from archytaszx.diagram.graph import Node
+from diracula.zx.graph import Node
+from diracula.zx.phase import Phase
 
 
 class DenoteError(Exception):

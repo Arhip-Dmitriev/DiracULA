@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for :mod:`archytaszx.semantics.pathsum`, checked against dense numpy vectors."""
+"""Tests for :mod:`diracula.pathsum`, checked against dense numpy vectors."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import sympy
 
-from archytaszx.semantics import pathsum as P
+from diracula import pathsum as P
 
 H = np.array([[1, 1], [1, -1]]) / np.sqrt(2)
 

@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for :mod:`archytaszx.repl.zxview`: each drawn diagram contracts to the state's own
+"""Tests for :mod:`diracula.zxview`: each drawn diagram contracts to the state's own
 amplitudes; symbolic and oversized states are refused."""
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from archytaszx.diagram.bangbox import expand_concrete_boxes, instantiate_symbol
-from archytaszx.diagram.validate import validate
-from archytaszx.repl import zxview
-from archytaszx.repl.lang import Interpreter
-from archytaszx.semantics import pathsum as P
-from archytaszx.semantics.contract_numeric import contract
+from diracula import pathsum as P
+from diracula import zxview
+from diracula.lang import Interpreter
+from diracula.zx.bangbox import expand_concrete_boxes, instantiate_symbol
+from tests.zxoracle.contract_numeric import contract
+from tests.zxoracle.validate import validate
 
 STATES = [
     "|s> = |0>",

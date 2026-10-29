@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for :mod:`archytaszx.repl.zxdraw`: one layout for every renderer, the fallbacks, and the
+"""Tests for :mod:`diracula.zx.draw`: one layout for every renderer, the fallbacks, and the
 ZX drawing flags of the shell."""
 
 from __future__ import annotations
@@ -21,12 +21,13 @@ from pathlib import Path
 
 import pytest
 
-from archytaszx.repl import display as D
-from archytaszx.repl import zxdraw, zxview
-from archytaszx.repl.lang import Interpreter
-from archytaszx.repl.shell import VIEWS, _argument_parser, main
+from diracula import display as D
+from diracula import zxview
+from diracula.lang import Interpreter
+from diracula.shell import VIEWS, _argument_parser, main
+from diracula.zx import draw as zxdraw
 
-HORRIBLE = str(Path(__file__).resolve().parent.parent / "examples" / "horrible_state.azx")
+HORRIBLE = str(Path(__file__).resolve().parent.parent / "examples" / "horrible_state.ula")
 FOURIER = "gate F = |x>_d -> 1/sqrt(d) sum(y in 0..d){ e^(2*pi*i*x*y/d) |y>_d }\n"
 
 
@@ -77,14 +78,14 @@ def utf8(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_no_image_protocol_falls_back_to_unicode(
     monkeypatch: pytest.MonkeyPatch, utf8: None
 ) -> None:
-    monkeypatch.setenv("ARCHYTASZX_IMAGES", "none")
+    monkeypatch.setenv("DIRACULA_IMAGES", "none")
     assert "Ⓩ" in zxdraw.draw(view("|s> = H|0>"), "matplot")
 
 
 def test_matplotlib_failure_falls_back_to_unicode(
     monkeypatch: pytest.MonkeyPatch, utf8: None
 ) -> None:
-    monkeypatch.setenv("ARCHYTASZX_IMAGES", "kitty")
+    monkeypatch.setenv("DIRACULA_IMAGES", "kitty")
 
     def broken(*_a: object, **_k: object) -> bytes:
         raise ImportError("no matplotlib")
@@ -94,7 +95,7 @@ def test_matplotlib_failure_falls_back_to_unicode(
 
 
 def test_image_protocol_draws_an_image(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ARCHYTASZX_IMAGES", "kitty")
+    monkeypatch.setenv("DIRACULA_IMAGES", "kitty")
     assert zxdraw.draw(view("|s> = H|0>"), "matplot").startswith("\x1b_G")
 
 
@@ -125,7 +126,7 @@ def test_horrible_state_grids(
 def test_horrible_state_zx_draws(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ARCHYTASZX_IMAGES", "kitty")
+    monkeypatch.setenv("DIRACULA_IMAGES", "kitty")
     monkeypatch.setattr(D, "prepare", lambda *a, **k: None)
     assert main([HORRIBLE, "--zx"]) == 0
     assert "\x1b_G" in capsys.readouterr().out

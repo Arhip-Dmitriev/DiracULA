@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for :mod:`archytaszx.repl.display`: the three styles and mathtext validity."""
+"""Tests for :mod:`diracula.display`: the three styles and mathtext validity."""
 
 from __future__ import annotations
 
@@ -20,8 +20,9 @@ import io
 import pytest
 import sympy
 
-from archytaszx.repl import display as D
-from archytaszx.repl.lang import Interpreter
+from diracula import display as D
+from diracula import terminal as T
+from diracula.lang import Interpreter
 from tests.test_lang import SHOR
 
 
@@ -49,32 +50,32 @@ def test_shor_lines_render_in_mathtext() -> None:
         ({"TERM": "foot"}, True, "sixel"),
         ({"TERM": "xterm-256color"}, True, "none"),
         ({"TERM": "xterm-kitty"}, False, "none"),
-        ({"TERM": "xterm-256color", "ARCHYTASZX_IMAGES": "sixel"}, False, "sixel"),
+        ({"TERM": "xterm-256color", "DIRACULA_IMAGES": "sixel"}, False, "sixel"),
     ],
 )
 def test_protocol_detection(env: dict[str, str], tty: bool, expected: str) -> None:
-    assert D.protocol(env, tty) == expected
+    assert T.protocol(env, tty) == expected
 
 
 def test_theme() -> None:
-    assert D.dark({}) and D.dark({"COLORFGBG": "15;0"})
-    assert not D.dark({"COLORFGBG": "0;15"}) and not D.dark({"ARCHYTASZX_IMAGE_THEME": "light"})
+    assert T.dark({}) and T.dark({"COLORFGBG": "15;0"})
+    assert not T.dark({"COLORFGBG": "0;15"}) and not T.dark({"DIRACULA_IMAGE_THEME": "light"})
 
 
 @pytest.mark.parametrize("proto", ["kitty", "iterm", "sixel"])
 def test_image_escapes(proto: str, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("matplotlib")
-    monkeypatch.setenv("ARCHYTASZX_IMAGES", proto)
+    monkeypatch.setenv("DIRACULA_IMAGES", proto)
     out = D.terminal_image(plot_lines(SHOR))
     assert out is not None
     prefix = {"kitty": "\x1b_Ga=T,f=100", "iterm": "\x1b]1337;File=inline=1", "sixel": "\x1bPq"}
     assert out.startswith(prefix[proto])
-    png = D.render_png([r"|0\rangle"], dark_theme=False)
+    png = T.render_png([r"|0\rangle"], dark_theme=False)
     assert png.startswith(b"\x89PNG")
 
 
 def test_no_image_when_not_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ARCHYTASZX_IMAGES", raising=False)
+    monkeypatch.delenv("DIRACULA_IMAGES", raising=False)
     assert D.terminal_image([r"|0\rangle"]) is None
     assert Interpreter(style="plot").execute("|a> = |0>\nshow(|a>)") == "|a⟩ = |0⟩"
 

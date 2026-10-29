@@ -18,27 +18,27 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import archytaszx
-from archytaszx.embed import Program, Value
-from archytaszx.repl.lang import LangError
+import diracula
+from diracula.embed import Program, Value
+from diracula.lang import LangError
 
 
 def test_default_program_is_shared() -> None:
-    assert isinstance(archytaszx.azx, Program) and archytaszx.azx is archytaszx.azx
-    assert archytaszx.Program is Program
+    assert isinstance(diracula.ula, Program) and diracula.ula is diracula.ula
+    assert diracula.Program is Program
     with pytest.raises(AttributeError):
-        archytaszx.nothing  # noqa: B018
+        diracula.nothing  # noqa: B018
 
 
 def test_symbolic_state_by_attribute_and_item() -> None:
-    azx = Program()
-    azx("var n")
-    azx.psi = azx.H**azx.n | azx.ket(0) ** azx.n
-    assert azx.psi.ascii() == "|psi> = 2^(-n/2) sum(x in 0..2^n){ |x> }"
-    azx["|phi>"] = azx["|psi> - 2 |0><0|psi>"]
-    assert azx.phi.unicode().startswith("|φ⟩ = 2^(-n/2)")
-    assert azx.phi.latex().startswith("$|\\phi\\rangle")
-    assert azx.phi._repr_latex_() == azx.phi.latex()
+    ula = Program()
+    ula("var n")
+    ula.psi = ula.H**ula.n | ula.ket(0) ** ula.n
+    assert ula.psi.ascii() == "|psi> = 2^(-n/2) sum(x in 0..2^n){ |x> }"
+    ula["|phi>"] = ula["|psi> - 2 |0><0|psi>"]
+    assert ula.phi.unicode().startswith("|φ⟩ = 2^(-n/2)")
+    assert ula.phi.latex().startswith("$|\\phi\\rangle")
+    assert ula.phi._repr_latex_() == ula.phi.latex()
 
 
 def test_operators() -> None:

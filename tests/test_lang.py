@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for :mod:`archytaszx.repl.lang`: the Dirac language, the Shor worked example in
+"""Tests for :mod:`diracula.lang`: the Dirac language, the Shor worked example in
 symbolic and numeric form, typing errors, and the shell's language mode."""
 
 from __future__ import annotations
@@ -22,17 +22,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from archytaszx.repl.lang import (
+from diracula import pathsum as P
+from diracula.lang import (
     Interpreter,
     LangError,
     LangSyntaxError,
     LangTypeError,
     tokenize,
 )
-from archytaszx.repl.shell import Shell, main
-from archytaszx.semantics import pathsum as P
+from diracula.shell import Shell, main
 
-HORRIBLE = str(Path(__file__).resolve().parent.parent / "examples" / "horrible_state.azx")
+HORRIBLE = str(Path(__file__).resolve().parent.parent / "examples" / "horrible_state.ula")
 
 SHOR = """\
 var n, m, N, a
@@ -469,7 +469,7 @@ class TestShellLanguage:
         assert shell.errors == 1
 
     def test_script(self, capsys: pytest.CaptureFixture[str], tmp_path: object) -> None:
-        path = tmp_path / "shor.azx"  # type: ignore[operator]
+        path = tmp_path / "shor.ula"  # type: ignore[operator]
         path.write_text(SHOR, encoding="utf-8")
         assert main(["--ascii", str(path)]) == 0
         assert capsys.readouterr().out.rstrip("\n") == SHOR_ASCII
@@ -510,7 +510,7 @@ show(r, p, q)
 
 class TestShorsScript:
     def test_symbolic(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        script = tmp_path / "shor.azx"
+        script = tmp_path / "shor.ula"
         script.write_text(SHOR_SOURCE)
         assert main([str(script), "--ascii"]) == 0
         out = capsys.readouterr().out.splitlines()
@@ -738,7 +738,7 @@ class TestRanges:
 
 class TestShowModes:
     def test_zx_and_both(self) -> None:
-        from archytaszx.repl.printer import NotationMode
+        from diracula.zx.listing import NotationMode
 
         interp, _ = run("|a> = |1>")
         zx = interp.render([(None, interp.states["a"])], "ascii", NotationMode.ZX)
@@ -752,7 +752,7 @@ class TestShowModes:
         assert "  graph:" in listed
 
     def test_any_state_has_a_drawing(self) -> None:
-        from archytaszx.repl.printer import NotationMode
+        from diracula.zx.listing import NotationMode
 
         source = "|a> = sum(x in 0..128){ 1/(x + 1) |x> }\nshow(|a>)"
         zx = Interpreter(style="ascii", mode=NotationMode.ZX).execute(source)
@@ -761,7 +761,7 @@ class TestShowModes:
         assert raw.splitlines()[1].startswith("  graph:") and "|a> = " not in raw
 
     def test_drawing_is_the_same_for_every_size(self) -> None:
-        from archytaszx.repl.printer import NotationMode
+        from diracula.zx.listing import NotationMode
 
         source = (
             "func f(x) = bit(x, 0)\ngate U = |x>|y> -> |x>|y xor f(x)>\n"
@@ -778,7 +778,7 @@ class TestShowModes:
         )
 
     def test_zx_drawing_styles(self) -> None:
-        from archytaszx.repl.printer import NotationMode
+        from diracula.zx.listing import NotationMode
 
         for zx_style, mark in (("unicode", "Ⓧ1"), ("ascii", "(X 1)"), ("matplot", "Ⓧ1")):
             interp = Interpreter(style="unicode", mode=NotationMode.ZX, zx_style=zx_style)
@@ -786,7 +786,7 @@ class TestShowModes:
             assert mark in out
 
     def test_symbolic_state_draws_a_bang_box(self) -> None:
-        from archytaszx.repl.printer import NotationMode
+        from diracula.zx.listing import NotationMode
 
         interp = Interpreter(style="ascii", mode=NotationMode.ZX)
         out = interp.execute("var n\n|a> = |0>^@n\nshow(|a>)")

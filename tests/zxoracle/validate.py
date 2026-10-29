@@ -15,7 +15,7 @@
 port usage, generator policy conformance, symbol-role collisions, and the parameter
 environment.
 
-:func:`validate` is a pure read function from a :class:`~archytaszx.diagram.graph.Diagram` to a
+:func:`validate` is a pure read function from a :class:`~diracula.zx.graph.Diagram` to a
 :class:`ValidationReport`, reporting typed issues rather than a bool.
 
 Port usage. Every port of every node must be exactly one of: an endpoint of exactly one
@@ -25,7 +25,7 @@ wire, or an entry in the matching boundary list. Over-use is
 :class:`IssueKind.PORT_UNUSED`, a hard error. The under-use check is skipped for a node
 already implicated in an ``UNKNOWN_NODE`` or ``PORT_INDEX_OUT_OF_RANGE`` issue.
 
-Dimension checking is layered the way :meth:`~archytaszx.algebra.dimension.Dim.unify` is,
+Dimension checking is layered the way :meth:`~diracula.zx.dimension.Dim.unify` is,
 uniformly for dimensions joined by a wire, shared by one node's legs, or tied to its phase.
 Unequal and non-unifiable is a hard error -- :class:`IssueKind.DIMENSION_MISMATCH`,
 :class:`IssueKind.DIMENSION_POLICY_VIOLATION`, or
@@ -35,7 +35,7 @@ Unequal and non-unifiable is a hard error -- :class:`IssueKind.DIMENSION_MISMATC
 and a resolution can report both at once.
 
 ``ALL_LEGS_EQUAL`` resolves a node's whole leg set through
-:func:`~archytaszx.algebra.dimension.unify_all`, a monotone bindings fixpoint;
+:func:`~diracula.zx.dimension.unify_all`, a monotone bindings fixpoint;
 ``TIED_TO_LEG_DIM``'s phase/leg check resolves through those same bindings. Each residual
 ``DEFERRED`` pair gets its own issue. ``PRODUCT_OF_LEGS_EQUAL`` instead unifies the product of
 the input dims against the product of the output dims, and skips the leg-agreement check.
@@ -43,7 +43,7 @@ the input dims against the product of the output dims, and skips the leg-agreeme
 Diagram-global pass. :func:`_check_dimension_consistency` runs last, so its issues append
 after every per-node one. It gathers every dimension equality the diagram asserts -- wire
 endpoints by ``Wire.sort_key``, then each node's policy and phase equalities by node id --
-and hands them to :func:`~archytaszx.algebra.dimension.solve` as one system. FAILURE is the
+and hands them to :func:`~diracula.zx.dimension.solve` as one system. FAILURE is the
 hard :class:`IssueKind.DIMENSION_GLOBALLY_INCONSISTENT`; an exhausted budget is the hard
 :class:`IssueKind.DIMENSION_GLOBAL_RESOLUTION_EXHAUSTED`. A converged ``DEFERRED`` emits
 nothing, each such finding already being reported per node or per wire. The pass is skipped
@@ -55,15 +55,15 @@ vector, which carries its dimension nowhere.
 :class:`IssueKind.SYMBOL_ROLE_COLLISION` rejects a name used in two symbol roles in one
 diagram, the roles read off the sympy assumptions each symbol constructor stamps.
 
-Parameter environment. Every name :attr:`~archytaszx.diagram.graph.Diagram.parameters` binds
+Parameter environment. Every name :attr:`~diracula.zx.graph.Diagram.parameters` binds
 must be a symbol the diagram carries, in exactly one role, at a value inside that role's
 domain. An uncarried name is the deferred :class:`IssueKind.PARAMETER_UNKNOWN_SYMBOL`; an
 out-of-domain value is the hard :class:`IssueKind.PARAMETER_VALUE_OUT_OF_DOMAIN`. A name
 already reported as a role collision is skipped.
 
 Determinism. Every pass whose issue-append order is observable iterates a snapshot sorted
-by :meth:`~archytaszx.diagram.graph.Wire.sort_key` /
-:meth:`~archytaszx.diagram.graph.PortRef.sort_key`, never a frozenset directly.
+by :meth:`~diracula.zx.graph.Wire.sort_key` /
+:meth:`~diracula.zx.graph.PortRef.sort_key`, never a frozenset directly.
 
 Out of scope: contraction and numeric meaning, and repair.
 """
@@ -80,17 +80,16 @@ from typing import cast
 
 import sympy as sp  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
-from archytaszx.algebra.dimension import (
+from diracula.zx.bangbox import BangBox, outside_crossings
+from diracula.zx.dimension import (
     Dim,
     DimSubstituteValue,
     DimSymbolKey,
     solve,
     unify_all,
 )
-from archytaszx.algebra.phase import INDEX
-from archytaszx.diagram.bangbox import BangBox, outside_crossings
-from archytaszx.diagram.generators import DimensionPolicy, PhaseSchema
-from archytaszx.diagram.graph import (
+from diracula.zx.generators import DimensionPolicy, PhaseSchema
+from diracula.zx.graph import (
     BangBoxId,
     Diagram,
     Direction,
@@ -100,6 +99,7 @@ from archytaszx.diagram.graph import (
     PortRef,
     Wire,
 )
+from diracula.zx.phase import INDEX
 
 
 class ValidateError(Exception):
@@ -229,7 +229,7 @@ def _check_wire_dimensions(diagram: Diagram, issues: list[ValidationIssue]) -> N
     # Sorted by the hash-independent Wire.sort_key(): diagram.wires is a frozenset whose
     # hash folds in Direction's member-name hash, so iterating it directly would append
     # issues in a PYTHONHASHSEED-dependent order, breaking the "first in validate order"
-    # selection archytaszx.rewrite.engine relies on.
+    # selection a rewrite relies on.
     for wire in sorted(diagram.wires, key=lambda w: w.sort_key()):
         port_a = _resolve(diagram, wire.a, issues)
         port_b = _resolve(diagram, wire.b, issues)
@@ -387,21 +387,21 @@ def _check_port_usage(diagram: Diagram, issues: list[ValidationIssue]) -> None:
 def _classify_symbol_role(symbol: sp.Symbol) -> str | None:
     """Which namespace ``symbol`` belongs to, from its assumptions.
 
-    ``archytaszx.algebra``'s four symbol constructors each stamp a distinct assumption signature,
+    The four symbol constructors of :mod:`diracula.zx` each stamp a distinct assumption signature,
     matched here against sympy's computed closure. Round-tripped per constructor by
     ``tests/test_validate.py``'s ``TestSymbolConstructorRolesRoundTrip``:
 
-    * :meth:`~archytaszx.algebra.dimension.Dim.symbol` (``positive=True, integer=True``) --
+    * :meth:`~diracula.zx.dimension.Dim.symbol` (``positive=True, integer=True``) --
       "dimension". Signature ``integer and positive``.
-    * a dimension's exponent, from :meth:`~archytaszx.algebra.dimension.Dim.__pow__` via
+    * a dimension's exponent, from :meth:`~diracula.zx.dimension.Dim.__pow__` via
       ``_exponent_symbol`` (``integer=True, nonnegative=True``, never ``positive``: an
       exponent of 0 is legal, a dimension of 0 is not) -- "exponent". Signature ``integer
       and not positive``; ``nonnegative`` holds for both and does not discriminate.
-    * :meth:`~archytaszx.algebra.phase.Phase.symbol` (``real=True``) -- "phase". Signature ``real
+    * :meth:`~diracula.zx.phase.Phase.symbol` (``real=True``) -- "phase". Signature ``real
       and not integer``; a dimension or exponent symbol is ``real`` by closure.
-    * :meth:`~archytaszx.algebra.scalar.Scalar.symbol` (``complex=True``) -- "scalar". Signature
+    * :meth:`~diracula.zx.scalar.Scalar.symbol` (``complex=True``) -- "scalar". Signature
       ``complex and not real``; the other three are ``complex`` by closure.
-    * :meth:`~archytaszx.diagram.bangbox.Mult.symbol` (Phase 7) -- "multiplicity". Same real
+    * :meth:`~diracula.zx.bangbox.Mult.symbol` (Phase 7) -- "multiplicity". Same real
       assumptions as an exponent, discriminated only by an inert ``multiplicity`` marker
       sympy's own closure never sets, so it survives into ``assumptions0`` untouched.
 
@@ -526,9 +526,9 @@ def _check_generator_policy(node: Node, issues: list[ValidationIssue]) -> None:
     gen = node.generator_type
 
     # Dimension is stored per port, so a node with zero legs and no phase vector carries it
-    # nowhere at all. archytaszx.semantics.denote already refuses such a node; stating the same
+    # nowhere at all. tests.zxoracle.denote already refuses such a node; stating the same
     # fact here, as a hard error, is what makes validate(d).is_valid imply every node in d
-    # is denotable -- the invariant archytaszx.rewrite.engine's apply step 8 depends on.
+    # is denotable -- the invariant a rewrite depends on.
     if node.num_inputs == 0 and node.num_outputs == 0 and node.phase is None:
         issues.append(
             ValidationIssue(
@@ -850,7 +850,7 @@ def _check_bangbox_scopes(diagram: Diagram, issues: list[ValidationIssue]) -> No
     (Phase 7).
 
     A port-scope box's port must additionally currently be a diagram boundary slot --
-    :mod:`archytaszx.diagram.bangbox`'s instantiate/kill mechanism has no other way to grow
+    :mod:`diracula.zx.bangbox`'s instantiate/kill mechanism has no other way to grow
     or remove it (see that module's docstring) -- on a side whose leg policy admits any
     count from one below its current one upward. Boxes failing any check are excluded
     from :func:`_check_bangbox_nesting`, mirroring :func:`_check_port_usage`'s
@@ -1018,7 +1018,7 @@ def _check_bangbox_nesting(diagram: Diagram, issues: list[ValidationIssue]) -> N
     an undeclared overlap can only mean two
     independent boxes were built over the same node in error, since a legitimate nested
     relationship is always recorded via ``parent`` (see
-    :mod:`archytaszx.diagram.bangbox`'s module docstring).
+    :mod:`diracula.zx.bangbox`'s module docstring).
     """
     broken = _broken_bangbox_ids(issues)
     boxes = {box_id: box for box_id, box in diagram.bang_boxes.items() if box_id not in broken}

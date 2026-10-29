@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from diracula import display as D
+from diracula import terminal as T
 from diracula import zxview
 from diracula.lang import Interpreter
 from diracula.shell import VIEWS, _argument_parser, main
@@ -127,6 +127,6 @@ def test_horrible_state_zx_draws(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DIRACULA_IMAGES", "kitty")
-    monkeypatch.setattr(D, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(T, "prepare", lambda *a, **k: None)
     assert main([HORRIBLE, "--zx"]) == 0
     assert "\x1b_G" in capsys.readouterr().out

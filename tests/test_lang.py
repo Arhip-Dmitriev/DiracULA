@@ -411,7 +411,7 @@ class TestErrors:
             ("|a> = |0>_2 + |0>|0>", LangError, "different widths"),
             ("var n\n|a> = H|0>^@n", LangError, "single qubits"),
             ("|a> = QQ|0>", LangError, "not defined"),
-            ("var H", LangTypeError, "already a op"),
+            ("var H", LangTypeError, "already a gate"),
             ("var pi", LangSyntaxError, "reserved"),
             ("gate H = |x> -> |x>", LangTypeError, "built-in"),
             ("oracle B = |x> -> |0>", LangSyntaxError, "oracle is gone"),
@@ -458,10 +458,10 @@ class TestShellLanguage:
         assert shell.run_line("|a> = H|0>") == ""
         assert shell.run_line("show(|a>)") == "|a> = sqrt(2)/2 sum(y in 0..2){ |y> }"
 
-    def test_engine_commands_take_a_colon(self) -> None:
+    def test_meta_commands_take_a_colon(self) -> None:
         shell = Shell(display="ascii")
         assert shell.run_line(":zx") == "mode: zx"
-        assert "spider_fusion" in shell.run_line(":rules")
+        assert shell.run_line(":rules").startswith("error: unknown meta-command :rules")
 
     def test_errors_are_counted(self) -> None:
         shell = Shell(display="ascii")

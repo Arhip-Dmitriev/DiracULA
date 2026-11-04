@@ -37,13 +37,18 @@ def _i_as_exp(expr: sympy.Basic) -> sympy.Basic:
     )
 
 
+def _expanded_exp(x: sympy.Basic) -> sympy.Basic:
+    e = sympy.expand(x.exp)
+    return sympy.exp(e) if e.is_Add else x
+
+
 def _exp_sums(expr: Any) -> Any:
-    """``exp`` exponents expanded into sums."""
+    """``exp`` exponents that expand into sums, expanded."""
     if not isinstance(expr, sympy.Basic):
         return expr
     return expr.replace(
         lambda x: isinstance(x, sympy.exp) and not x.exp.is_Add and x.exp.has(sympy.Add),
-        lambda x: sympy.exp(sympy.expand(x.exp)),
+        _expanded_exp,
     )
 
 

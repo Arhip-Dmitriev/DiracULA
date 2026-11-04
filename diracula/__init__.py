@@ -15,6 +15,8 @@
 
 from typing import Any
 
+from diracula import _sympy_fixes  # noqa: F401
+
 
 def __getattr__(name: str) -> Any:
     """``Program`` and ``ula`` (a shared default Program) from :mod:`diracula.embed`."""

@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Benchmarks of ArchytasZX against Qiskit and PyZX on algorithm outputs over (n, d).
+"""Benchmarks of DiracULA against Qiskit and PyZX on algorithm outputs over (n, d).
 
 ::
 

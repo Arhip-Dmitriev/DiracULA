@@ -16,8 +16,8 @@
 Algorithms: GHZ, Deutsch-Jozsa (f(x) = x mod d), one Grover iteration (marked w = 1), and Shor
 order finding for N = 15, a = 7 (n count qudits, a mod-15 work register, inverse Fourier
 transform over d^n; Qiskit and PyZX use controlled multiply-by-7^(2^k) mod 15 from SWAPs and Xs).
-ArchytasZX runs each as a Dirac-language program; Qiskit computes the statevector and PyZX
-runs ``full_reduce`` on the |0>-plugged circuit graph, both at d = 2 only. An ArchytasZX
+DiracULA runs each as a Dirac-language program; Qiskit computes the statevector and PyZX
+runs ``full_reduce`` on the |0>-plugged circuit graph, both at d = 2 only. A DiracULA
 result at d = 2 and n <= 8 is compared with Qiskit's statevector outside the timed region.
 """
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 from benchmarks.circuit import Unsupported, qiskit_to_pyzx
 from benchmarks.harness import Wrong, row, timed
 
-TOOLS = ("archytaszx", "qiskit", "pyzx")
+TOOLS = ("diracula", "qiskit", "pyzx")
 ALGORITHMS = ("ghz", "dj", "grover", "shor")
 VALIDATE_MAX_N = 8
 
@@ -79,7 +79,7 @@ def cases(quick: bool) -> list[dict]:
         for d in dims:
             for n in sizes:
                 for tool in TOOLS:
-                    if tool == "archytaszx" or d == 2:
+                    if tool == "diracula" or d == 2:
                         out.append(
                             {"suite": "algorithms", "family": alg, "tool": tool, "n": n, "d": d}
                         )
@@ -87,12 +87,12 @@ def cases(quick: bool) -> list[dict]:
 
 
 def supports(case: dict) -> str | None:
-    if case["tool"] != "archytaszx" and case["d"] != 2:
+    if case["tool"] != "diracula" and case["d"] != 2:
         return f"{case['tool']} is qubit-only"
     return None
 
 
-def _archytaszx(case: dict, repeat: int) -> dict:
+def _diracula(case: dict, repeat: int) -> dict:
     from diracula import Program
 
     src = f"var n = {case['n']}, d = {case['d']}\n{SCRIPTS[case['family']]}\nshow(|p>)"
@@ -218,5 +218,5 @@ def _pyzx(case: dict, repeat: int) -> dict:
 
 
 def run(case: dict, repeat: int) -> dict:
-    fn = {"archytaszx": _archytaszx, "qiskit": _qiskit, "pyzx": _pyzx}[case["tool"]]
+    fn = {"diracula": _diracula, "qiskit": _qiskit, "pyzx": _pyzx}[case["tool"]]
     return fn(case, repeat)

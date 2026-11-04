@@ -36,7 +36,7 @@ INK = "#000000"
 INK_2 = "#333333"
 GRID = "#d9d9d9"
 TOOL_STYLE = {
-    "archytaszx": ("#0072b2", "o", "-", "ArchytasZX (light to dark: d = 2 to 16)"),
+    "diracula": ("#0072b2", "o", "-", "DiracULA (light to dark: d = 2 to 16)"),
     "qiskit": ("#d55e00", "s", "-", "Qiskit (d = 2 only)"),
     "pyzx": ("#009e73", "^", "-", "PyZX (d = 2 only)"),
 }
@@ -108,7 +108,7 @@ def plot_algorithms() -> list[Path]:
             lines.items(), key=lambda kv: (list(TOOL_STYLE).index(kv[0][0]), kv[0][1])
         ):
             color, marker, linestyle, _ = TOOL_STYLE[tool]
-            if tool == "archytaszx":
+            if tool == "diracula":
                 color = BLUE_RAMP[round(ds.index(d) * (len(BLUE_RAMP) - 1) / max(1, len(ds) - 1))]
             y = ds.index(d)
             rs.sort(key=lambda r: r["n"])

@@ -48,3 +48,10 @@ playground.py
 
 # personal
 personal_notes.txt
+
+# local-only
+.*/
+!.github/
+*SPEC.txt
+publications/
+personal notes

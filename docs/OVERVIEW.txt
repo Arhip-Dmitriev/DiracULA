@@ -38,8 +38,9 @@ ships a Lean 4 library against which its results can be certified.
   diracula.embed       The Python embedding (Program, Value, ula).
   diracula.shell       The diracula command and the interactive shell.
   diracula/lean        The Lean library DiracULA over Mathlib: Base, Sym, SymNorm, SymCanon
-                       (symbolic sums and their normaliser), LSym, LDigit, LCanon (integer
-                       atoms), Lang (the meaning of programs).
+                       (symbolic sums and their normaliser), LSym, LDigit, LTable, LCanon
+                       (integer atoms), LPass (rewriting under facts), Lang (the meaning of
+                       programs).
 
 
 3. VALUES ARE PATH SUMS
@@ -95,9 +96,9 @@ syntax, equals the printed closed form for every value of its size symbols (LEAN
 -----------------
 
   - An assertion whose condition does not reduce to a truth value fails as undecided.
-  - Programs using rand, a branch on a value that is not concrete, normalise, floating-point
-    format specs or states assigned from Python cannot be certified; nor can results whose
-    proof needs an identity the normaliser does not prove yet (LEAN.txt, section 10).
+  - Programs using rand, a branch on a value that is not concrete, floating-point format
+    specs or states assigned from Python cannot be certified; nor can results whose proof
+    needs an identity the normaliser does not prove yet (LEAN.txt, section 10).
   - An amplitude outside the ZX scalar and phase grammar, such as cos(t) of a real symbol t,
     has no ZX view.
   - The Python API is not yet stable between releases.

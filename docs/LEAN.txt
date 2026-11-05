@@ -4,7 +4,7 @@ DIRACULA DOCUMENTATION
 Lean 4 Certificates of Language Results
 
 Applies to: DiracULA 0.1.x
-Lean library: diracula/lean (DiracULA: LSym, LDigit, LCanon, Lang; Lean 4.35.0)
+Lean library: diracula/lean (DiracULA: LSym, LDigit, LTable, LCanon, LPass, Lang; Lean 4.35.0)
 Requires: Mathlib
 Exporter: diracula.lean_lang (with its mirror diracula.lean_lsym)
 
@@ -31,8 +31,9 @@ See INSTALL.txt, section 3. In brief, from the library directory diracula/lean:
     lake env lean /path/to/certificate.lean
 
 The library DiracULA depends on Mathlib only. Base, Sym, SymNorm and SymCanon define symbolic
-sums and their verified normaliser (section 6.1); LSym, LDigit and LCanon extend them with
-integer atoms; Lang gives programs their meaning. In the shell,
+sums and their verified normaliser (section 6.1); LSym, LDigit, LTable and LCanon extend them
+with integer atoms; LPass rewrites atoms under facts about free variables (section 6.3); Lang
+gives programs their meaning. In the shell,
 --certify DIR writes certificates and --check checks each with Lean (SHELL.txt, section 3.5).
 
 
@@ -53,13 +54,31 @@ is ν (IN + i), each parameter of the program (a var symbol) is ν (2000 + k). T
 holds for every V and every ν, so for every value of the symbols. Its hypotheses state the
 range facts used: 2 ≤ d for each dimension, n : ℕ with ρ.dv k = d ^ n for each register of
 d^n levels, 1 ≤ n where the result needs it, and one hypothesis per assume statement.
+V.ρ.OK states that every dimension is positive, every coefficient atom is nonzero and the
+atoms come in conjugate pairs (atom 2j + 1 is the conjugate of atom 2j), so that a result
+with complex parameters holds for every nonzero value of them. An integer parameter that only
+multiplies amplitudes is read as a coefficient atom in the same way.
+
+A result whose proof reads a loop count as a width holds at every ν with ν (2000 + k) = n for
+each such count: the parameter k the loop runs over equals the width n of the registers of
+d^n levels. An assume statement D2 % D1 == 0 between dimension monomials is used as D1 ∣ D2.
 
 A result of a program containing a loop over a symbolic range holds at every ν for which
 the loop counts are nonnegative. An assertion A == B is proved as A.sem V = B.sem V. A
 measured distribution is proved as one theorem per branch (the branch's probability is
 |<value|psi>|^2), one that the probabilities sum to 1, one that <psi|psi> = 1 and, for a
-function of the outcomes, one that every outcome maps to the printed value. The density
-matrix a measurement leaves is proved in its vectorised form, [o = o'] psi(o) conj(psi(o')).
+function of the outcomes or an expression of measured values, one that every outcome maps
+to a printed value of its probability and that the printed values are distinct, over ℕ for
+integer values and over ℚ for rational ones. The density matrix a measurement leaves is
+proved in its vectorised form, [o = o'] psi(o) conj(psi(o')).
+
+normalise(s), shown or inside a larger expression, is proved as
+
+    ∀ ν, axDen V ν R = ((Real.sqrt (⟨s|s⟩.sem V ν).re : ℝ) : ℂ)⁻¹ * s.sem V ν
+
+from three facts: k s equals R, k² ⟨s|s⟩ = 1 and k is a positive real (nrm_cert), the first
+two by the normaliser. An operator printed as the image of a basis ket, |x> -> E(x), is proved
+as the operator applied to |x> for a free x equalling E(x).
 
 4. THE MEANING OF A PROGRAM
 ---------------------------
@@ -77,6 +96,7 @@ Prog has the constructors
   inn L a b            Σ_y conj(a(y)) b(y): <a|b>
   cnj a                the complex conjugate
   loop L J lo cnt s i  s applied cnt times to i, iteration t reading J = lo + t
+  sum D x b            Σ_{x<D} b: a sum of states over an index
 
 A gate |x>... -> body becomes the kernel of its body: the output kets as deltas on the output
 registers, the input registers read as the pattern variables. U^@n on a register of n
@@ -89,11 +109,21 @@ Each Lean definition carries the .ula line it translates as a comment.
 
 Ket values and phases may contain integer functions: digit products ddot and bitdot,
 exclusive or, bits, digit sums, repunits (d^n - 1)/(d - 1), powers of two, the value of a
-dimension, the user's functions and powmod. Each is an atom: a variable whose value is the
+dimension, remainders modulo a dimension less one, the user's functions and powmod. Each is
+an atom: a variable whose value is the
 function of its arguments, each argument reduced modulo its register's levels, so that an
 atom is periodic in every variable it reads. User functions and powmod are arbitrary
 functions supplied by the valuation (V.fa); no axiom describes them. Exclusive or and bit 0
-read modulo 2 are read as a sum and as the variable itself.
+read modulo 2 are read as a sum and as the variable itself. A user function whose body is a
+case split ifelse(y < L - 1, A, B), y reduced modulo the L levels of its register, is read as
+A - [L ∣ y + 1] A + [L ∣ y + 1] B; a printed call f(x) of a function of one argument is read on
+x modulo L.
+
+For a loop variable j, d^j, floor(x/d^j) % d, x % d^j and floor(x/d^j) are the atoms power,
+digit j, low j digits and remaining digits, d a dimension or an integer; j is an argument that
+is not reduced (modulus 0), so that no elimination substitutes into it. Under an assumed
+divisibility D1 ∣ D2 the quotient D2/D1 is an atom. An index of two levels that multiplies
+another factor inside an exclusive or is read as itself modulo 2, so that the atom reads a bit.
 
 6. THE PROOF
 ------------
@@ -116,8 +146,10 @@ constant expressions. The normaliser removes one bound variable per move:
         sum_k omega_D^(k A + B) = D [D | A] omega_D^B;
   - a variable read only through one delta of its range, counted by gcd(a, D).
 
-Canonicalisation substitutes each delta's pivot, merges roots of unity, evaluates constants and
-sorts factors.
+Canonicalisation substitutes each delta's pivot, merges roots of unity, those of two constant orders into one of their least common
+multiple, moves the constant term
+of a root of unity of constant order into the coefficient, writes each constant radical as a
+square times distinct primes, evaluates constants and sorts factors.
 
 6.2 Moves for integer atoms
 
@@ -132,10 +164,45 @@ Besides these moves, the normaliser
   - removes digit products and digit conditions with a zero argument, merges atoms that
     compute the same value, reads a reduced argument mod(q, M) as q under a delta or root of
     unity whose modulus divides M, and drops unused atoms;
-  - renames bound variables and atoms by first occurrence and sorts the sums.
+  - pins a variable to (-s c) mod D when a delta [D ∣ s x + c] of its own constant range fixes
+    it, whatever else reads it;
+  - pins a variable to a value read from atoms, the atoms that do not read the variable
+    moved before those that do;
+  - reads d^0 as 1 and the low 0 digits as 0, exclusive or with a zero argument as the other
+    argument reduced, and a reduced argument mod(q, M) for a constant M with the coefficients
+    of q reduced modulo M;
+  - reads (a xor c(P - 1)) xor c P as a xor c(2P - 1) for a bit c = mod(q, 2) and a power of
+    two P, every modulus a power of two;
+  - reads an atom as an earlier atom computing the same value in the factors and in the later
+    atoms;
+  - inside a remainder modulo N - 1, reads a remainder modulo N - 1 as its argument, the
+    value of N as 1, mod(-1, N) as 0 and, under a delta [N ∣ 1 + u] of the term, a reduced
+    argument u = mod(y, N) as 0; reads mod(0, N) as 0;
+  - reads a reduced argument mod(z, N) of a remainder z modulo N - 1 as z, and a delta
+    [N ∣ 1 + z] or [N ∣ 1 + z - N] of such a remainder as false, for 2 ≤ N;
+  - orders the atom table canonically, each step the atom of least key among those that read
+    no atom left, names the atoms by first occurrence in the factors and then in the table,
+    renames bound variables by first occurrence and sorts the sums.
 A loop is proved by induction on its count: the engine's invariant S(J) is shown to equal
 the initial state at J = lo and to satisfy S(J + 1) = step_J(S(J)), both by the normaliser
 with J free.
+
+6.3 Rewriting under facts about free variables
+
+Some identities hold only where a fact about a free variable holds. LPass rewrites atoms,
+roots of unity and deltas under a context of such facts, each atom as a polynomial in new
+atoms, and keeps the value of every term at each valuation where the context holds:
+
+  d^(J+1) = d · d^J,  x mod d^(J+1) = x mod d^J + d^J · dig_J(x)      for J ≥ 0;
+  d^v = N,  x mod d^v = x mod N                                    for N = d^(ν v);
+  ω_{D1}^p = ω_{D2}^(q p),  [D2 ∣ q p] = [D1 ∣ p]                    for q = D2/D1, D1 ∣ D2.
+
+The step of a loop whose range starts at lo ≥ 0 is checked with the invariant at J + 1
+rewritten under J ≥ 0. A result is closed after the program's expression is rewritten under
+its width links and divisibilities (section 3); where one normalisation leaves terms, their
+normal form is rewritten and normalised once more. A delta [M ∣ s z + R] of a remainder
+z = mod(u, N - 1), u = mod(y, N), is split into the three terms
+[M ∣ s u + R] - [N ∣ u + 1] [M ∣ s u + R] + [N ∣ u + 1] [M ∣ R].
 
 7. WHAT IS TRUSTED
 ------------------
@@ -173,16 +240,25 @@ kernel's check succeeds; --check confirms it with Lean.
 The following results are outside the certified fragment and are reported as "cannot
 certify".
 
-10.1 Exclusive or of symbolic bit patterns
-A loop such as examples/fanout_sequential.ula applies y xor c*2^j for j below a symbol n. Its
-invariant step needs (a xor y(2^j - 1)) xor y 2^j = a xor y(2^(j+1) - 1), which holds for
-y in {0, 1} but not for every integer y. The certificate states its theorem for every
-valuation, without ranges on the output registers, so the normaliser does not prove the
-step, and the result is reported as "cannot certify".
+10.1 Values the program does not determine
+Results that read rand, a branch on a value that is not concrete, or a state assigned from
+Python have no syntax tree to translate.
 
-10.2 Loop invariants over symbolic digit positions
-The loops of examples/qft_adder.ula, examples/phase_estimation.ula, examples/cyclic_shift.ula
-and examples/shor.ula act on digit j of a register, through floor(x/d^j) % d, d^j or
-powmod. Their invariants contain d^j and d^(-j) for a loop variable j. Dimension monomials
-have exponents in width symbols only, and the digit-wise character sum ranges over all
-digits, so these results are reported as "cannot certify".
+10.2 Sizes with offsets
+A register of d^(n - 1) levels has a width that is not a symbol; its size is reported as
+"cannot certify: the size d**(n - 1)".
+
+10.3 Loops in normalised states
+normalise of a state built by a loop over a symbolic range is not certified: the identity
+k² <s|s> = 1 is proved only for states without loops.
+
+10.4 Real parameters under conjugation
+A coefficient atom is complex, so the conjugate of an integer parameter used as an amplitude is
+a separate atom: <s|s> for |s> = a |0> + b |1> is printed as a^2 + b^2 but proved only as
+|a|^2 + |b|^2, and is reported as "cannot certify".
+
+10.5 Phases that are not periodic in their input
+An operator is stated for every integer valuation of its inputs. A printed operator whose phase
+e^(2 pi i x/D) reads an input x of fewer than D levels, such as Z RZ with RZ = e^(i pi x/4) on a
+qubit, holds only for reduced inputs and is reported as "cannot certify". States built with
+such gates are certified.

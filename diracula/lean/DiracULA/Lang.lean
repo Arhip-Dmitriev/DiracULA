@@ -59,6 +59,13 @@ inductive Prog where
   | loop (L : List DMon) (J : ℕ) (lo : ℤ) (cnt : IPoly) (step init : Prog) (inv : List ATm)
   /-- `Σ_{x < D} body`. -/
   | sum (D : DMon) (x : ℕ) (body : Prog)
+  /-- `a` with variable `v` read as variable `w` for each pair `(v, w)` of `m`. -/
+  | ren (m : List (ℕ × ℕ)) (a : Prog)
+  /-- `a` with variable `x` read as the value of `v`. -/
+  | sub (x : ℕ) (v : IPoly) (a : Prog)
+
+/-- Variable `v` renamed by the pairs `m`: the first `w` with `(v, w)` in `m`, else `v`. -/
+def rmap (m : List (ℕ × ℕ)) (v : ℕ) : ℕ := (m.lookup v).getD v
 
 /-- `k` iterations of `u` from `s`, iteration `i` reading `J = lo + i`. -/
 noncomputable def loopSem (dv : ℕ → ℕ) (L : List DMon) (J : ℕ) (lo : ℤ) (u s : Fn) : ℕ → Fn
@@ -80,6 +87,8 @@ noncomputable def Prog.sem (V : LV) : Prog → Fn
   | .loop L J lo cnt step init _ => fun ν =>
       loopSem V.ρ.dv L J lo (step.sem V) (init.sem V) (ipDen ν cnt).toNat ν
   | .sum D x b => fun ν => ∑ j ∈ range (D.den V.ρ.dv), b.sem V (Function.update ν x j)
+  | .ren m a => fun ν => a.sem V (ν ∘ rmap m)
+  | .sub x v a => fun ν => a.sem V (Function.update ν x (ipDen ν v))
 
 /-- The iteration counts of a program's loops. -/
 def Prog.counts : Prog → List IPoly
@@ -92,6 +101,8 @@ def Prog.counts : Prog → List IPoly
   | .cnj a => a.counts
   | .loop _ _ _ c s i _ => c :: (s.counts ++ i.counts)
   | .sum _ _ b => b.counts
+  | .ren _ a => a.counts
+  | .sub _ _ a => a.counts
 
 /-! ## Tuples -/
 
@@ -601,6 +612,14 @@ def Prog.sym (fl : List ℕ) (PW : List (DMon × DMon)) : Prog → Option (List 
     match b.sym fl PW with
     | some e => if b.counts = [] then some (axSums [(x, D)] e) else none
     | none => none
+  | .ren m a =>
+    match a.sym fl PW with
+    | some e => if a.counts = [] ∧ renOKA (rmap m) e = true then some (axRen (rmap m) e) else none
+    | none => none
+  | .sub x v a =>
+    match a.sym fl PW with
+    | some e => if a.counts = [] ∧ e.all (subOK x v) = true then some (e.map (tSub x v)) else none
+    | none => none
 
 /-- Every loop count of `p` is nonnegative at each valuation agreeing with `ν` from `2 IN` on. -/
 def HiOK (p : Prog) (ν : ℕ → ℤ) : Prop :=
@@ -726,6 +745,28 @@ theorem Prog.sym_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
       rw [axDen_sums]
       simp only [sumsV]
       exact Finset.sum_congr rfl fun j _ => ih e' he _ fun c h' => by simp [hcb] at h'
+    · simp at h
+  | ren m a ih =>
+    simp only [Prog.sym] at h
+    split at h
+    · next e' he =>
+      split_ifs at h with hcb
+      simp only [Option.some.injEq] at h
+      subst h
+      simp only [Prog.sem]
+      rw [axDen_ren V _ _ hcb.2]
+      exact ih e' he _ fun c h' => by simp [hcb.1] at h'
+    · simp at h
+  | sub x v a ih =>
+    simp only [Prog.sym] at h
+    split at h
+    · next e' he =>
+      split_ifs at h with hcb
+      simp only [Option.some.injEq] at h
+      subst h
+      simp only [Prog.sem]
+      rw [axDen_tSub V x v e' hcb.2]
+      exact ih e' he _ fun c h' => by simp [hcb.1] at h'
     · simp at h
 
 /-! ## Certificates -/

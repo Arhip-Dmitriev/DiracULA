@@ -945,6 +945,103 @@ theorem sortSums_ok (V : LV) (t : ATm) (ν : ℕ → ℤ) : (sortSums t).den V �
       sumsV_sSort _ _ h]
   · rfl
 
+/-! ## Exact pins -/
+
+/-- `x` read as `y` in a term whose sums are `a ++ (x, D) :: b` with `a ++ b = a' ++ (y, D) :: b'`
+and whose factors are `pre ++ [D ∣ x - y] :: post`: for `x, y < D` the delta holds only at
+`x = y`. -/
+def xPin1 (t : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D : DMon) (pre : List Fac) (f : Fac)
+    (post : List Fac) (a' : List (ℕ × DMon)) (y : ℕ) (D' : DMon) (b' : List (ℕ × DMon)) :
+    Option ATm :=
+  if decide (f.1 = D) && decide (D' = D) && decide (f.2 = ipSub (ipV x) (ipV y)) &&
+      decide (x ≠ y) && !((a ++ b).map (·.1)).contains x && !((a' ++ b').map (·.1)).contains y &&
+      !(ids t.ats).contains x && !(ids t.ats).contains y then
+    some ⟨t.c, a ++ b, t.ats.map (atSub x (ipV y)), (pre ++ post).map (facSub x (ipV y)),
+      t.phs.map (facSub x (ipV y))⟩
+  else none
+
+/-- The first exact pin of a term. -/
+def xPin (t : ATm) : Option ATm :=
+  firstSome (fun p => firstSome (fun q => firstSome
+    (fun r => xPin1 t p.1 p.2.2 p.2.1.1 p.2.1.2 q.1 q.2.1 q.2.2 r.1 r.2.1.1 r.2.1.2 r.2.2)
+    (splits (p.1 ++ p.2.2))) (splits t.dels)) (splits t.sums)
+
+theorem ids_atSub (l : List Atom) (x : ℕ) (v : IPoly) : ids (l.map (atSub x v)) = ids l := by
+  induction l with
+  | nil => rfl
+  | cons a l ih => simp only [List.map_cons, ids] at ih ⊢; simp [atSub, ih]
+
+theorem dvd_range_eq (N : ℕ) (j k : ℕ) (hj : j < N) (hk : k < N)
+    (h : ((N : ℕ) : ℤ) ∣ (j : ℤ) - (k : ℤ)) : j = k := by
+  have h0 := Int.eq_zero_of_abs_lt_dvd h (by rw [abs_lt]; constructor <;> omega)
+  omega
+
+theorem xPin1_ok (V : LV) (t t' : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D : DMon)
+    (pre : List Fac) (f : Fac) (post : List Fac) (a' : List (ℕ × DMon)) (y : ℕ) (D' : DMon)
+    (b' : List (ℕ × DMon)) (hs : t.sums = a ++ (x, D) :: b) (hd : t.dels = pre ++ f :: post)
+    (hab : a ++ b = a' ++ (y, D') :: b')
+    (h : xPin1 t a b x D pre f post a' y D' b' = some t') (ν : ℕ → ℤ) :
+    t'.den V ν = t.den V ν := by
+  unfold xPin1 at h
+  split_ifs at h with hc
+  simp only [Option.some.injEq] at h
+  subst h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', List.contains_eq_mem,
+    decide_eq_false_iff_not] at hc
+  obtain ⟨⟨⟨⟨⟨⟨⟨hf1, hD'⟩, hf2⟩, hxy⟩, hx⟩, hy'⟩, hxa⟩, hya⟩ := hc
+  subst hD'
+  unfold ATm.den
+  congr 1
+  rw [hs, sumsV_pull _ a b x D' hx, hab, sumsV_pull _ a' b' y D' hy',
+    sumsV_pull _ a' b' y D' hy']
+  refine sumsV_congr _ _ _ _ (fun μ => Finset.sum_congr rfl fun k hk => ?_) ν
+  simp only [Finset.mem_range] at hk
+  set ν' := Function.update μ y (k : ℤ) with hν'
+  have hyv : ν' y = k := by simp [ν']
+  have hR : ∀ S : List (ℕ × DMon), abody V ⟨t.c, S, t.ats.map (atSub x (ipV y)),
+      (pre ++ post).map (facSub x (ipV y)), t.phs.map (facSub x (ipV y))⟩ ν' =
+      bodyOf V.ρ.dv (pre ++ post) t.phs (aext V t.ats (Function.update ν' x k)) := by
+    intro S
+    unfold abody
+    simp only
+    rw [bodyOf_sub]
+    have hidy : y ∉ ids (t.ats.map (atSub x (ipV y))) := by rw [ids_atSub]; exact hya
+    have h1 : ipDen (aext V (t.ats.map (atSub x (ipV y))) ν') (ipV y) = k := by
+      rw [ipDen_V, aext_off V _ _ y hidy, hyv]
+    rw [h1]
+    have h2 := aext_sub V t.ats x hxa (ipV y) (by simp [plainP, ipVs, ipV, hya])
+      (by simp [ipHas, ipV]; exact hxy) ν'
+    rw [ipDen_V, hyv] at h2
+    rw [← h2]
+  rw [hR]
+  have hsplit : ∀ j : ℕ, j < D'.den V.ρ.dv → abody V t (Function.update ν' x (j : ℤ)) =
+      (if j = k then bodyOf V.ρ.dv (pre ++ post) t.phs
+        (aext V t.ats (Function.update ν' x (j : ℤ))) else 0) := by
+    intro j hj
+    unfold abody
+    rw [hd]
+    have hdel : delV V.ρ.dv (aext V t.ats (Function.update ν' x (j : ℤ))) f =
+        if j = k then 1 else 0 := by
+      unfold delV
+      rw [hf2, ipDen_sub, ipDen_V, ipDen_V, aext_off V _ _ x hxa, aext_off V _ _ y hya,
+        Function.update_self, Function.update_of_ne (Ne.symm hxy), hyv, hf1]
+      by_cases hjk : j = k
+      · subst hjk; simp
+      · rw [if_neg hjk, if_neg]
+        exact fun hdv => hjk (dvd_range_eq _ j k hj hk hdv)
+    simp only [bodyOf, List.map_append, List.map_cons, List.prod_append, List.prod_cons, hdel]
+    split_ifs <;> ring
+  rw [Finset.sum_congr rfl fun j hj => hsplit j (Finset.mem_range.1 hj),
+    Finset.sum_ite_eq' (range (D'.den V.ρ.dv)) k, if_pos (Finset.mem_range.2 hk)]
+
+theorem xPin_ok (V : LV) (t t' : ATm) (h : xPin t = some t') (ν : ℕ → ℤ) :
+    t'.den V ν = t.den V ν := by
+  obtain ⟨p, hp, h1⟩ := firstSome_spec _ _ _ h
+  obtain ⟨q, hq, h2⟩ := firstSome_spec _ _ _ h1
+  obtain ⟨r, hr, h3⟩ := firstSome_spec _ _ _ h2
+  exact xPin1_ok V t t' p.1 p.2.2 p.2.1.1 p.2.1.2 q.1 q.2.1 q.2.2 r.1 r.2.1.1 r.2.1.2 r.2.2
+    (splits_spec _ _ hp) (splits_spec _ _ hq) (splits_spec _ _ hr) h3 ν
+
 /-! ## The normaliser -/
 
 /-- Eliminations repeated, at most `n` of them, the atom rules applied before each. -/
@@ -952,7 +1049,9 @@ theorem sortSums_ok (V : LV) (t : ATm) (ν : ℕ → ℤ) : (sortSums t).den V �
   | 0, t => t
   | n + 1, t => match aElimStep PW (aRules (t.ats.length + 1) t) with
     | some t' => aElimAll PW n t'
-    | none => t
+    | none => match xPin (aRules (t.ats.length + 1) t) with
+      | some t' => aElimAll PW n t'
+      | none => t
 
 theorem aElimAll_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (n : ℕ) (t : ATm) (ν : ℕ → ℤ) : (aElimAll PW n t).den V ν = t.den V ν := by
@@ -963,7 +1062,10 @@ theorem aElimAll_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
     split
     · next t' h =>
       rw [ih, aElimStep_ok V hρ PW hPW _ t' h, (aRules_ok V (t.ats.length + 1) t).den]
-    · rfl
+    · split
+      · next t' h =>
+        rw [ih, xPin_ok V _ t' h, (aRules_ok V (t.ats.length + 1) t).den]
+      · rfl
 
 /-- Deltas reading digit conditions rewritten, when the table's variables are distinct. -/
 def dzStep (PW : List (DMon × DMon)) (t : ATm) : ATm :=

@@ -460,9 +460,60 @@ def a_elim_step(pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
     return None
 
 
+def x_pin1(
+    t: ATm,
+    a: tuple[tuple[int, Y.DMon], ...],
+    b: tuple[tuple[int, Y.DMon], ...],
+    x: int,
+    d: Y.DMon,
+    pre: tuple[Y.Fac, ...],
+    f: Y.Fac,
+    post: tuple[Y.Fac, ...],
+    a2: tuple[tuple[int, Y.DMon], ...],
+    y: int,
+    d2: Y.DMon,
+    b2: tuple[tuple[int, Y.DMon], ...],
+) -> ATm | None:
+    """``xPin1``."""
+    i = ids(t[2])
+    if (
+        f[0] == d
+        and d2 == d
+        and f[1] == Y.ip_sub(Y.ip_v(x), Y.ip_v(y))
+        and x != y
+        and x not in [u for u, _ in (*a, *b)]
+        and y not in [u for u, _ in (*a2, *b2)]
+        and x not in i
+        and y not in i
+    ):
+        v = Y.ip_v(y)
+        return (
+            t[0],
+            a + b,
+            tuple(at_sub(x, v, at) for at in t[2]),
+            tuple(Y.fac_sub(x, v, g) for g in (*pre, *post)),
+            tuple(Y.fac_sub(x, v, g) for g in t[4]),
+        )
+    return None
+
+
+def x_pin(t: ATm) -> ATm | None:
+    """``xPin``."""
+    for a, (x, d), b in Y._splits(t[1]):
+        for pre, f, post in Y._splits(t[3]):
+            for a2, (y, d2), b2 in Y._splits(a + b):
+                e = x_pin1(t, a, b, x, d, pre, f, post, a2, y, d2, b2)
+                if e is not None:
+                    return e
+    return None
+
+
 def a_elim_all(pw: Sequence[tuple[Y.DMon, Y.DMon]], n: int, t: ATm) -> ATm:
     for _ in range(n):
-        t2 = a_elim_step(pw, a_rules(len(t[2]) + 1, t))
+        r = a_rules(len(t[2]) + 1, t)
+        t2 = a_elim_step(pw, r)
+        if t2 is None:
+            t2 = x_pin(r)
         if t2 is None:
             return t
         t = t2

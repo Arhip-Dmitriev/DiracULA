@@ -223,12 +223,57 @@ def j_pass(lo: int, j: int, e: Sequence[ATm]) -> list[ATm]:
 
 @dataclass(frozen=True, eq=False)
 class Prog:
-    """``Prog``: ``kind`` is leaf, app, ten, mul, add or inn; ``name`` is the Lean definition a
-    named node is written as."""
+    """``Prog``: ``kind`` is leaf, app, ten, mul, add, inn, cnj, loop, sum, ren or sub;
+    ``name`` is the Lean definition a named node is written as."""
 
     kind: str
     args: tuple[Any, ...]
     name: str | None = None
+
+
+def rmap(pairs: Sequence[tuple[int, int]]) -> Callable[[int], int]:
+    """``rmap``: the first ``w`` with ``(v, w)`` in ``pairs``, else ``v``."""
+
+    def m(v: int) -> int:
+        return next((w for u, w in pairs if u == v), v)
+
+    return m
+
+
+LOW = 2800
+ANALYTIC = ("exp", "sqrt", "cos", "sin", "tan", "log")
+"""The scalar functions applied to operators."""
+
+
+def p_tidy(e: sympy.Expr) -> sympy.Expr:
+    """``e`` simplified and tidied by the engine."""
+    from diracula import pathsum as P
+
+    return P.tidy(sympy.simplify(sympy.sympify(e)))
+
+
+"""The first variable of a trace's summed register values."""
+
+
+def cm_inverse(c: Y.CMon) -> Y.CMon | None:
+    """``1/c`` of a coefficient without gcd factors: ``1/sqrt(x) = sqrt(x)/x``."""
+    q, r, sq, rc, am, gc = c
+    if gc or q == 0:
+        return None
+    den = Fraction(1)
+    for x in rc:
+        den *= x
+    return (1 / (q * den), (-r) % 1, tuple(-x for x in sq), tuple(rc), tuple(-a for a in am), ())
+
+
+def _op_label(node: object) -> str:
+    """The name of an operator tree, or A."""
+    return getattr(node, "id", "A")
+
+
+def swap_io(k: int) -> tuple[tuple[int, int], ...]:
+    """Output register ``i`` and input register ``i`` exchanged, for ``i < k``."""
+    return tuple((i, IN + i) for i in range(k)) + tuple((IN + i, i) for i in range(k))
 
 
 def counts(p: Prog) -> list[Y.IPoly]:
@@ -273,6 +318,19 @@ def prog_sym(
         if x0 is None:
             return None
         return [t_conj(t) for t in x0]
+    if p.kind == "sub":
+        x, v, a = p.args
+        x0 = prog_sym(a, fl, pw)
+        if x0 is None or counts(a) or not all(sub_ok(x, v, t) for t in x0):
+            return None
+        return [t_sub(x, v, t) for t in x0]
+    if p.kind == "ren":
+        pairs, a = p.args
+        x0 = prog_sym(a, fl, pw)
+        m = rmap(pairs)
+        if x0 is None or counts(a) or not ren_oka(m, x0):
+            return None
+        return ax_ren(m, x0)
     xs = [prog_sym(q, fl, pw) for q in p.args if isinstance(q, Prog)]
     if any(x is None for x in xs):
         return None
@@ -380,6 +438,11 @@ class Text:
             text = f".{p.kind} {levels} {self.prog(p.args[1], False)} {self.prog(p.args[2], False)}"
         elif p.kind == "cnj":
             text = f".cnj {self.prog(p.args[0], False)}"
+        elif p.kind == "ren":
+            pairs = "[" + ", ".join(f"({u}, {w})" for u, w in p.args[0]) + "]"
+            text = f".ren {pairs} {self.prog(p.args[1], False)}"
+        elif p.kind == "sub":
+            text = f".sub {p.args[0]} {self.ip(p.args[1])} {self.prog(p.args[2], False)}"
         elif p.kind == "loop":
             levels, j, lo, cnt, step, init, inv = p.args
             ls = "[" + ", ".join(self.dm(m) for m in levels) + "]"
@@ -419,6 +482,8 @@ class Vars:
     divs: list[tuple[sympy.Expr, sympy.Expr]] = field(default_factory=list)
     default: sympy.Expr | None = None
     catoms: list[sympy.Symbol] = field(default_factory=list)
+    angle_atoms: dict[sympy.Symbol, sympy.Symbol] = field(default_factory=dict)
+    """The atom ``e^(i t)`` of each real angle symbol ``t``."""
     anchors: dict[tuple[sympy.Expr, sympy.Symbol], int] = field(default_factory=dict)
     funcs: list[str] = field(default_factory=list)
     needs_width: bool = False
@@ -620,8 +685,8 @@ class Vars:
                 if len(inner) == 1 and inner[0][1] == 1 and len(inner[0][0]) <= 1:
                     mon += list(inner[0][0]) * int(k)
                 else:
-                    if int(k) != 1:
-                        raise CertifyError(f"the index expression {e}")
+                    for _ in range(int(k) - 1):
+                        inner = Y.ip_mul(inner, self.atom_poly(base, ctx))
                     rest_mon = tuple(sorted(mon))
                     for m2, c2 in Y.ip_mul(inner, ((rest_mon, 1),)):
                         p = Y.ip_ins(m2, int(c) * c2, p)
@@ -807,6 +872,7 @@ class Vars:
     def amp(self, amp: sympy.Expr) -> list[tuple[Y.CMon, list[Y.Fac], list[Y.Fac]]]:
         """An amplitude as terms: a coefficient, deltas and roots of unity."""
         out = []
+        amp = self.angles(sympy.sympify(amp))
         expanded = sympy.expand(amp, log=False, power_exp=False, power_base=False)
         for term in sympy.Add.make_args(expanded):
             if term == 0:
@@ -819,6 +885,59 @@ class Vars:
                     raise
                 out += self.amp(simpler)
         return out
+
+    def real_angle_symbols(self, e: sympy.Basic) -> list[sympy.Symbol]:
+        return [
+            x
+            for x in e.free_symbols
+            if isinstance(x, sympy.Symbol)
+            and x.is_real
+            and not x.is_integer
+            and x not in self.dsyms
+            and x not in self.angle_atoms.values()
+        ]
+
+    def angles(self, e: sympy.Expr) -> sympy.Expr:
+        """``e`` with ``e^(i c t)``, ``cos(c t)`` and ``sin(c t)`` of a real symbol ``t`` and an
+        integer ``c`` read through the atom ``z_t = e^(i t)``: ``e^(i c t)`` is ``z_t^c`` and
+        ``e^(-i c t)`` is ``conj(z_t)^c``."""
+
+        def trig(f: sympy.Basic) -> bool:
+            return isinstance(f, (sympy.exp, sympy.cos, sympy.sin)) and bool(
+                self.real_angle_symbols(f)
+            )
+
+        if not e.atoms(sympy.exp, sympy.cos, sympy.sin) or not any(
+            trig(f) for f in e.atoms(sympy.exp, sympy.cos, sympy.sin)
+        ):
+            return e
+        e = e.replace(
+            lambda f: isinstance(f, (sympy.cos, sympy.sin)) and bool(self.real_angle_symbols(f)),
+            lambda f: f.rewrite(sympy.exp),
+        )
+
+        def split(f: sympy.exp) -> sympy.Expr:
+            out: sympy.Expr = sympy.Integer(1)
+            rest: sympy.Expr = sympy.Integer(0)
+            for term in sympy.Add.make_args(sympy.expand(f.args[0])):
+                syms = self.real_angle_symbols(term)
+                if not syms:
+                    rest += term
+                    continue
+                if len(syms) != 1:
+                    raise CertifyError(f"the angle {term}")
+                t = syms[0]
+                c = sympy.simplify(term / (sympy.I * t))
+                if not c.is_Integer:
+                    raise CertifyError(f"the angle {term}: not an integer multiple of {t}")
+                z = self.angle_atoms.setdefault(t, sympy.Symbol(f"e^(i*{t.name})", complex=True))
+                out *= z ** int(c) if c > 0 else sympy.conjugate(z) ** int(-c)
+            return out * sympy.exp(rest)
+
+        e = e.replace(
+            lambda f: isinstance(f, sympy.exp) and bool(self.real_angle_symbols(f)), split
+        )
+        return e
 
     def amp_term(self, term: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac], list[Y.Fac]]:
         """One product of an amplitude: a coefficient, deltas and roots of unity."""
@@ -852,6 +971,12 @@ class Vars:
                     if y.is_Integer and int(y) == 1:
                         self.needs_width = True
                     return self.dmon(m), Y.ip_sub(self.ipoly(x), self.ipoly(y))
+        for x, y in ((a, b), (b, a)):
+            if y == 0 and isinstance(x, sympy.Mod):
+                try:
+                    return self.dmon(x.args[1]), self.ipoly(x.args[0])
+                except CertifyError:
+                    break
         raise CertifyError(f"the delta {f}")
 
     def factor(self, f: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac]]:
@@ -1494,6 +1619,15 @@ class Certifier:
         self.outcome_fn: Callable[[sympy.Expr], sympy.Expr] = lambda v: v
         self.norms: Mapping[int, Sequence[sympy.Expr]] = {}
         self.nrm_obls: list[tuple[Prog, list[Y.DMon], ATm, sympy.Expr]] = []
+        self.side_obls: list[tuple[str, Prog, list[ATm]]] = []
+        """Theorems a translation relies on: a title, a program and its value."""
+        self.channels: Mapping[str, object] = {}
+        self.aliases: Mapping[str, object] = {}
+        """Each gate named by an operator expression: that expression's tree."""
+        """Each channel's defining syntax tree."""
+        self.hooks: dict[str, Callable[..., Any]] = {}
+        """Engine values a translation needs: ``layout`` of an operator tree, ``power`` the state
+        ``A^J |s>`` for a symbolic ``J``."""
         self.vs = Vars()
         self.decls: list[tuple[str, Prog]] = []
         self.wl_used: list[tuple[int, Y.DMon, Y.DMon]] = []
@@ -1526,6 +1660,8 @@ class Certifier:
         from diracula import lang as L
 
         if isinstance(node, L.Name):
+            if node.id in self.aliases:
+                return "op"
             return "op" if node.id in self.trees or node.id == "I" else "scalar"
         if isinstance(node, L.Braket):
             return "bra" if node.bra else "ket"
@@ -1548,6 +1684,20 @@ class Certifier:
             return self.kind(node.left)
         if isinstance(node, L.Call) and node.name == "normalise" and len(node.args) == 1:
             return self.kind(node.args[0])
+        if isinstance(node, L.Call) and node.name == "adj" and len(node.args) == 1:
+            inner = self.kind(node.args[0])
+            return {"ket": "bra", "bra": "ket"}.get(inner, inner)
+        if isinstance(node, L.Call) and node.name == "inv" and len(node.args) == 1:
+            return self.kind(node.args[0])
+        if (
+            isinstance(node, L.Call)
+            and node.name in ANALYTIC
+            and len(node.args) == 1
+            and self.kind(node.args[0]) == "op"
+        ):
+            return "op"
+        if isinstance(node, L.Bin) and node.op == "^" and self.kind(node.left) == "op":
+            return "op"
         return "scalar"
 
     def named(self, node: object) -> bool:
@@ -1558,6 +1708,8 @@ class Certifier:
             return self.is_state(node.content.strip())
         if isinstance(node, L.Name):
             return self.kind(node) == "op"
+        if isinstance(node, L.Call) and (node.name in ("adj", "inv") or node.name in ANALYTIC):
+            return any(self.named(a) for a in node.args)
         children = [getattr(node, f) for f in ("left", "right", "arg", "body") if hasattr(node, f)]
         return any(self.named(c) for c in children)
 
@@ -1622,7 +1774,11 @@ class Certifier:
             else:
                 prev = self.previous(ev.name, index)
                 p, got = self.state(prev)
-                for op in reversed(ev.nodes):
+                for pos, op in enumerate(reversed(ev.nodes)):
+                    cnt = self.symbolic_count(op)
+                    if cnt is not None and pos == 0:
+                        p = self.power_loop(op.left, cnt, p, got, self.log[prev].value)  # type: ignore[attr-defined]
+                        continue
                     q, out = self.op(op, got)
                     p, got = Prog("app", (self.levels(got), q, p)), out
         finally:
@@ -1748,6 +1904,22 @@ class Certifier:
         """A scalar-valued tree."""
         from diracula import lang as L
 
+        if isinstance(node, L.Call) and node.name == "tr" and len(node.args) == 1:
+            arg = node.args[0]
+            if self.kind(arg) == "op":
+                if "layout" not in self.hooks:
+                    raise CertifyError("the trace of an operator of unknown registers")
+                pairs = self.hooks["layout"](arg)
+                lay = (tuple(w for w, _ in pairs), tuple(d for _, d in pairs))
+                q, out = self.op(arg, lay)
+                self.match(out, lay)
+                return self.op_trace(q, lay)
+            if self.mixed_valued(arg):
+                v, lay = self.dens(arg)
+                return self.diag_sum(v, lay, len(lay[0]))
+            p, lay = self.expr(arg)
+            return Prog("inn", (self.levels(lay), p, p))
+
         if not self.named(node) and not self.has_bra(node):
             return self.scalar_leaf(node)
         if isinstance(node, L.Juxt) and self.kind(node.left) == "bra" and self.bra_only(node.left):
@@ -1785,6 +1957,11 @@ class Certifier:
             ka, kb = self.kind(node.left), self.kind(node.right)
             if isinstance(node, L.Juxt) and ka == "op" and kb == "ket":
                 p, lay = self.expr(node.right)
+                cnt = self.symbolic_count(node.left)
+                if cnt is not None:
+                    init_value = self.hooks["value"](node.right) if "value" in self.hooks else None
+                    base = cast(Any, node.left).left
+                    return self.power_loop(base, cnt, p, lay, init_value), lay
                 q, out = self.op(node.left, lay)
                 return Prog("app", (self.levels(lay), q, p)), out
             if (
@@ -1842,6 +2019,8 @@ class Certifier:
 
         if isinstance(node, L.Name) and node.id == "I":
             return self.ident(lay), lay
+        if isinstance(node, L.Name) and node.id in self.aliases:
+            return self.op(self.aliases[node.id], lay)
         if isinstance(node, L.Name):
             return self.gate(node.id, lay)
         if isinstance(node, L.Bin) and node.op == "@":
@@ -1869,6 +2048,35 @@ class Certifier:
         if isinstance(node, L.Neg):
             p, out = self.op(node.arg, lay)
             return Prog("mul", (MINUS, p)), out
+        if isinstance(node, L.Call) and node.name == "adj" and len(node.args) == 1:
+            p, out = self.op(node.args[0], lay)
+            self.match(out, lay)
+            return Prog("cnj", (Prog("ren", (swap_io(len(lay[0])), p)),)), lay
+        if isinstance(node, L.Call) and node.name == "inv" and len(node.args) == 1:
+            return self.inverse(node.args[0], lay, _op_label(node.args[0])), lay
+        if isinstance(node, L.Call) and node.name in ANALYTIC and len(node.args) == 1:
+            return self.op_function(node.name, node.args[0], lay, None), lay
+        if isinstance(node, L.Bin) and node.op == "^":
+            cnt = self.reader.scalar(node.right, {})
+            if cnt.is_integer is not True:
+                return self.op_function("pow", node.left, lay, cnt), lay
+            if not cnt.is_Integer:
+                raise CertifyError(
+                    f"the symbolic power {cnt} of an operator not applied to a state"
+                )
+            n = int(cnt)
+            if n < 0:
+                q = self.inverse(node.left, lay, _op_label(node.left))
+                n = -n
+            else:
+                q, out = self.op(node.left, lay)
+                self.match(out, lay)
+            if n == 0:
+                return self.ident(lay), lay
+            res = q
+            for _ in range(n - 1):
+                res = Prog("app", (self.levels(lay), q, res))
+            return res, lay
         raise CertifyError(f"the operator expression {type(node).__name__}")
 
     def outer(self, ket: object, bra: object, lay: Layout) -> tuple[Prog, Layout]:
@@ -2105,6 +2313,668 @@ class Certifier:
         return self.declare(key, f"gate_{_clean(name)}", f"gate {name} = {tree.source}", p), lay
 
     # the theorem
+
+    def split_scalar(self, node: object) -> tuple[sympy.Expr, object]:
+        """``(c, A)`` for the tree ``c A`` of a scalar ``c`` and an operator ``A``."""
+        from diracula import lang as L
+
+        c: sympy.Expr = sympy.Integer(1)
+        while True:
+            if (
+                (isinstance(node, L.Juxt) or (isinstance(node, L.Bin) and node.op == "*"))
+                and self.kind(node.left) == "scalar"
+                and self.kind(node.right) == "op"
+            ):
+                c, node = c * self.reader.scalar(node.left, {}), node.right
+                continue
+            if isinstance(node, L.Neg) and self.kind(node.arg) == "op":
+                c, node = -c, node.arg
+                continue
+            return c, node
+
+    def holds(self, p: Prog, q: Prog) -> bool:
+        """Whether the mirror predicts that the normaliser proves ``p = q``."""
+        rhs = prog_sym(q, self.floors(), self.vs.pw)
+        return rhs is not None and cert_check(self.floors(), self.vs.pw, p, rhs)
+
+    def scalar_value(self, v: sympy.Expr) -> Prog:
+        return Prog("leaf", (scalar_terms(self.vs, p_tidy(v)),))
+
+    def op_function(self, name: str, arg: object, lay: Layout, t: sympy.Expr | None) -> Prog:
+        """``f(c A)`` read as its interpolation ``sum_j f(c l_j) E_j`` on the eigenvalues of
+        ``A``, the minimal polynomial that gives it proved as a side obligation; a diagonal
+        ``A`` on one register of at most 4 levels as ``sum_v f(c a(v)) [o = v][x = v]``."""
+        from diracula import operators as O
+
+        c, a_node = self.split_scalar(arg)
+        f = O.scalar_function(name, t)
+        base = _op_label(a_node)
+        label = f"{base}^{t}" if name == "pow" else f"{name}({base})"
+        a, out = self.op(a_node, lay)
+        self.match(out, lay)
+        levels = self.levels(lay)
+        ident = self.ident(lay)
+
+        def mul(x: Prog, y: Prog) -> Prog:
+            return Prog("app", (levels, x, y))
+
+        def lin(coef: sympy.Expr, x: Prog) -> Prog:
+            return Prog("mul", (self.scalar_value(coef), x))
+
+        def side(title: str, p: Prog, q: Prog) -> None:
+            self.side_obls.append((f"{title}, which gives {label}", p, prog_sym(q) or []))
+
+        square = mul(a, a)
+        if self.holds(square, ident):
+            side(f"{base}^2 = I", square, ident)
+            plus = Prog("add", (ident, a))
+            minus = Prog("add", (ident, Prog("mul", (MINUS, a))))
+            return Prog("add", (lin(f(c) / 2, plus), lin(f(-c) / 2, minus)))  # type: ignore[operator]
+        if self.holds(square, a):
+            side(f"{base}^2 = {base}", square, a)
+            rest = Prog("add", (ident, Prog("mul", (MINUS, a))))
+            return Prog("add", (lin(f(sympy.Integer(0)), rest), lin(f(c), a)))  # type: ignore[operator]
+        pw = [ident, a, square]
+        for m in range(3, O.MAX_ORDER + 1):
+            pw.append(mul(a, pw[-1]))
+            if self.holds(pw[m], ident):
+                side(f"{base}^{m} = I", pw[m], ident)
+                om = sympy.exp(2 * sympy.pi * sympy.I / m)
+                total: Prog | None = None
+                for j in range(m):
+                    proj: Prog | None = None
+                    for r in range(m):
+                        term = lin(om ** (-j * r) / m, pw[r])
+                        proj = term if proj is None else Prog("add", (proj, term))
+                    assert proj is not None
+                    part = lin(f(c * om**j), proj)  # type: ignore[operator]
+                    total = part if total is None else Prog("add", (total, part))
+                assert total is not None
+                return total
+        diag = self.diagonal_kernel(a_node, lay)
+        if diag is not None:
+            vals, leaf_a = diag
+            side(f"{base} is diagonal", a, leaf_a)
+            return self.diag_leaf([f(c * v) for v in vals], lay)  # type: ignore[operator]
+        raise CertifyError(f"{label}: no certified spectral form")
+
+    def diag_leaf(self, values: Sequence[sympy.Expr], lay: Layout) -> Prog:
+        """The kernel ``sum_v values[v] [o = v][x = v]`` on one register."""
+        lv = self.levels(lay)[0]
+        terms = []
+        for v, val in enumerate(values):
+            dels = [(lv, Y.ip_sub(Y.ip_v(0), Y.ip_c(v))), (lv, Y.ip_sub(Y.ip_v(IN), Y.ip_c(v)))]
+            for cm, d2, phs in self.vs.amp(p_tidy(val)):
+                facs = dels + list(d2)
+                terms.append(
+                    (cm, (), term_atoms(self.vs, facs + list(phs)), tuple(facs), tuple(phs))
+                )
+        return Prog("leaf", (terms,))
+
+    def diagonal_kernel(self, a_node: object, lay: Layout) -> tuple[list[sympy.Expr], Prog] | None:
+        """The diagonal values ``a(v)`` of an operator on one register of at most 4 levels and
+        its kernel ``sum_v a(v) [o = v][x = v]``; None for another operator."""
+        from diracula import pathsum as P
+
+        if len(lay[0]) != 1 or "value" not in self.hooks:
+            return None
+        n = sympy.sympify(lay[1][0] ** lay[0][0])
+        if not (n.is_Integer and int(n) <= 4):
+            return None
+        op = self.hooks["value"](a_node)
+        vals = []
+        for v in range(int(n)):
+            img = P.apply(op, P.basis(sympy.Integer(v), lay[0][0], lay[1][0]))
+            if len(img.terms) != 1 or img.terms[0].bound or img.terms[0].kets != (v,):
+                return None
+            vals.append(img.terms[0].amp)
+        return vals, self.diag_leaf(vals, lay)
+
+    def symbolic_count(self, node: object) -> sympy.Expr | None:
+        """The exponent of ``A^k`` for a symbolic ``k``, or None."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Bin) and node.op == "^" and self.kind(node.left) == "op":
+            cnt = self.reader.scalar(node.right, {})
+            if not cnt.is_Integer and cnt.is_integer:
+                return cnt
+        return None
+
+    def certify_density(
+        self, label: str, node: object, values: Mapping[str, object], value: Any
+    ) -> str:
+        """The Lean source certifying the printed density matrix of the shown tree ``node``,
+        vectorised."""
+        self.setup(len(self.log))
+        self.reader = Reader(self.parse, values, self.funcs)
+        v, lay = self.dens(node)
+        self.match(lay, self.mixed_layout(value))
+        p = self.declare(("dexpr", label), "shown", f"show({label})", v)
+        return self.density_source(label, f"{self.script}_show_{_clean(label)}", p, value)
+
+    def certify_dstate(self, name: str, value: Any) -> str:
+        """The Lean source certifying the density matrix ``|name>``, vectorised."""
+        index = self.last(name)
+        self.setup(len(self.log))
+        p, _ = self.dens_event(index)
+        return self.density_source(f"|{name}>", f"{self.script}_{_clean(name)}", p, value)
+
+    def density_source(self, what: str, thm: str, p: Prog, value: Any) -> str:
+        rhs = state_terms(self.vs, value.vec)
+        self.check(p, rhs)
+        head = f"/-- The printed density matrix of {what}, vectorised. -/\n"
+        extra = [
+            head + f"def printed : List ATm :=\n  {self.text.ex(rhs)}\n",
+            *self.hint_decls(),
+        ]
+        return self.source(
+            what, thm, self.lit_stmt(p, "printed"), self.lit_proof(p, "printed", ""), extra, []
+        )
+
+    def certify_pdist(
+        self, name: str, label: str, index: int, values: Mapping[str, object], raw: Any
+    ) -> str:
+        """The Lean source certifying the distribution of the partial measurement at event
+        ``index`` of ``|label>``: each branch's probability is the diagonal of the reduced
+        density matrix, the probabilities sum to 1 and ``tr rho = 1``."""
+        ev = self.log[index]
+        self.setup(index + 1)
+        self.reader = Reader(self.parse, ev.values, self.funcs)
+        self.upto = index
+        rho, lay = self.dens_event(self.previous(label, index))
+        k = len(lay[0])
+        regs_node, basis = ev.nodes
+        regs = self.regs(regs_node, k)
+        v = rho
+        if basis is not None:
+            v = self.conj_by(self.adjoint(self.on_regs(basis, lay, regs), lay), v, lay)
+        red, rlay = self.partial(v, lay, regs)
+        kk = len(rlay[0])
+        decls: list[str] = []
+        parts: list[tuple[str, str, str, str]] = []
+        total: list[ATm] = []
+        for b_i, br in enumerate(raw.branches, 1):
+            for b in br.free:
+                if b.lo != 0:
+                    raise CertifyError("a branch index that does not start at 0")
+                self.vs.ids.setdefault(b.symbol, PAR + 500 + len(self.vs.ids))
+                self.vs.params.append(b.symbol.name)
+            q = red
+            if len(br.registers) != kk:
+                raise CertifyError("a branch whose registers differ from the measured ones")
+            for i, val in enumerate(br.registers):
+                ip = self.vs.ipoly(sympy.sympify(val))
+                q = Prog("sub", (i, ip, Prog("sub", (kk + i, ip, q))))
+            prob = self.declare(("pprob", b_i), f"prob_{b_i}", f"branch {b_i}: <k|rho_R|k>", q)
+            d, pr = self.lit(
+                prob, scalar_terms(self.vs, br.prob), f"_{b_i}", f"The probability of branch {b_i}."
+            )
+            decls.append(d)
+            parts.append(
+                (
+                    f"branch {b_i} of the measurement of |{label}>: probability {br.prob}",
+                    f"{self.script}_{_clean(name)}_branch_{b_i}",
+                    self.lit_stmt(prob, f"R_{b_i}"),
+                    pr,
+                )
+            )
+            sums = []
+            for b in br.free:
+                sid = self.vs.bound(sympy.Dummy(b.symbol.name, integer=True), b.hi + 1)
+                sums.append((sid, self.vs.dmon(b.hi + 1)))
+            for t in scalar_terms(self.vs, br.prob):
+                total.append((t[0], tuple(sums) + t[1], t[2], t[3], t[4]))
+        tot = self.declare(
+            ("ptotal",),
+            "total",
+            f"the probabilities of measuring |{label}>",
+            Prog("leaf", (total,)),
+        )
+        d, pr = self.lit(
+            tot, scalar_terms(self.vs, sympy.Integer(1)), "_total", "The total probability."
+        )
+        decls.append(d)
+        parts.append(
+            (
+                "the probabilities sum to 1",
+                f"{self.script}_{_clean(name)}_total",
+                self.lit_stmt(tot, "R_total"),
+                pr,
+            )
+        )
+        tr = self.declare(("ptr",), "trace", f"tr rho of |{label}>", self.diag_sum(rho, lay, k))
+        d, pr = self.lit(tr, scalar_terms(self.vs, sympy.Integer(1)), "_norm", "One.")
+        decls.append(d)
+        parts.append(
+            (
+                f"tr rho of |{label}> = 1",
+                f"{self.script}_{_clean(name)}_norm",
+                self.lit_stmt(tr, "R_norm"),
+                pr,
+            )
+        )
+        first = parts[0]
+        return self.source(first[0], first[1], first[2], first[3], decls, parts[1:])
+
+    def low_var(self) -> int:
+        """A variable no state or kernel reads, below the parameters: ``LOW + j``."""
+        self.lows = getattr(self, "lows", 0) + 1
+        return LOW + self.lows
+
+    def vec(self, p: Prog, lay: Layout) -> Prog:
+        """The vectorised density matrix ``psi(o) conj(psi(o'))`` of a state program."""
+        return Prog("ten", (len(lay[0]), p, Prog("cnj", (p,))))
+
+    def conj_by(self, k_prog: Prog, v: Prog, lay: Layout) -> Prog:
+        """``K rho K^dagger`` vectorised: ``rho`` contracted with the kernel ``K (x) conj(K)``."""
+        k = len(lay[0])
+        levels = self.levels(lay)
+        return Prog("app", (levels + levels, Prog("ten", (k, k_prog, Prog("cnj", (k_prog,)))), v))
+
+    def adjoint(self, k_prog: Prog, lay: Layout) -> Prog:
+        """The kernel ``conj(K(x, o))``."""
+        return Prog("cnj", (Prog("ren", (swap_io(len(lay[0])), k_prog)),))
+
+    @staticmethod
+    def mixed_layout(value: Any) -> Layout:
+        k = len(value.vec.widths) // 2
+        return tuple(value.vec.widths[:k]), tuple(value.vec.dims[:k])
+
+    def mixed_valued(self, node: object) -> bool:
+        """Whether ``node`` denotes a density matrix built by a channel, a partial trace or a
+        partial measurement."""
+        from diracula import lang as L
+        from diracula import pathsum as P
+
+        if isinstance(node, L.Braket) and not node.bra:
+            name = node.content.strip()
+            if not self.is_state(name):
+                return False
+            return isinstance(self.log[self.previous(name, self.upto)].value, P.Mixed)
+        if isinstance(node, L.Call) and node.name in ("tr", "keep") and len(node.args) == 2:
+            return True
+        if isinstance(node, L.Juxt):
+            return self.is_channel(node.left) or self.mixed_valued(node.right)
+        return False
+
+    def is_channel(self, node: object) -> bool:
+        from diracula import lang as L
+
+        if isinstance(node, L.Name):
+            return node.id in self.channels
+        if isinstance(node, L.Call):
+            return node.name in ("depolarize", "dephase", "amp_damp")
+        if isinstance(node, L.Juxt):
+            return self.is_channel(node.left) or self.is_channel(node.right)
+        return False
+
+    def regs(self, node: object, k: int) -> list[int]:
+        from diracula import lang as L
+
+        items = node.items if isinstance(node, L.SetNode) else (node,)
+        out = []
+        for item in items:
+            v = self.reader.scalar(item, {})
+            if not (v.is_Integer and 0 <= v < k):
+                raise CertifyError(f"the register position {v}")
+            out.append(int(v))
+        return out
+
+    def dens_event(self, index: int) -> tuple[Prog, Layout]:
+        """The vectorised density matrix of the state after event ``index``."""
+        from diracula import pathsum as P
+
+        ev = self.log[index]
+        if not isinstance(ev.value, P.Mixed):
+            p, lay = self.state(index)
+            return self.vec(p, lay), lay
+        key = ("dens", index)
+        if key in self.done:
+            return self.done[key], self.mixed_layout(ev.value)
+        saved = self.upto
+        saved_reader = getattr(self, "reader", None)
+        self.upto = index
+        self.reader = Reader(self.parse, ev.values, self.funcs)
+        try:
+            if ev.kind == "dapply":
+                v, lay = self.dens_event(self.previous(ev.name, index))
+                for node in reversed(ev.nodes):
+                    v, lay = self.dmap(node, v, lay)
+            elif ev.kind == "pmeasure":
+                v, lay = self.dens_event(self.previous(ev.name, index))
+                v = self.dephase(v, lay, ev.nodes[0], ev.nodes[1])
+            elif ev.kind == "dassign":
+                v, lay = self.dens(ev.nodes[0])
+            else:
+                raise CertifyError(
+                    ev.source if ev.kind == "opaque" else "an unrecorded density matrix"
+                )
+        finally:
+            self.upto = saved
+            if saved_reader is not None:
+                self.reader = saved_reader
+        self.match(lay, self.mixed_layout(ev.value))
+        return self.declare(key, f"rho_{_clean(ev.name)}", ev.source, v), lay
+
+    def dens(self, node: object) -> tuple[Prog, Layout]:
+        """A density-valued tree, vectorised."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Braket) and not node.bra:
+            return self.dens_event(self.previous(node.content.strip(), self.upto))
+        if isinstance(node, L.Call) and node.name in ("tr", "keep") and len(node.args) == 2:
+            v, lay = self.dens_or_vec(node.args[0])
+            k = len(lay[0])
+            regs = self.regs(node.args[1], k)
+            kept = sorted(regs) if node.name == "keep" else [r for r in range(k) if r not in regs]
+            if not kept:
+                raise CertifyError("a partial trace over every register")
+            return self.partial(v, lay, kept)
+        if isinstance(node, L.Juxt):
+            v, lay = self.dens_or_vec(node.right)
+            return self.dmap(node.left, v, lay)
+        raise CertifyError(f"the density expression {type(node).__name__}")
+
+    def dens_or_vec(self, node: object) -> tuple[Prog, Layout]:
+        if self.mixed_valued(node):
+            return self.dens(node)
+        p, lay = self.expr(node)
+        return self.vec(p, lay), lay
+
+    def partial(self, v: Prog, lay: Layout, kept: Sequence[int]) -> tuple[Prog, Layout]:
+        """``tr_R rho`` of the vectorised ``v``, keeping the registers ``kept`` in that order: each
+        traced pair read as one summed variable, the kept registers renumbered."""
+        k = len(lay[0])
+        levels = self.levels(lay)
+        q = v
+        sums: list[tuple[Y.DMon, int]] = []
+        for r in range(k):
+            if r in kept:
+                continue
+            x = self.low_var()
+            q = Prog("sub", (r, Y.ip_v(x), Prog("sub", (k + r, Y.ip_v(x), q))))
+            sums.append((levels[r], x))
+        kk = len(kept)
+        pairs = tuple((kept[i], i) for i in range(kk)) + tuple(
+            (k + kept[i], kk + i) for i in range(kk)
+        )
+        pairs = tuple(pr for pr in pairs if pr[0] != pr[1])
+        if pairs:
+            q = Prog("ren", (pairs, q))
+        for lv, x in reversed(sums):
+            q = Prog("sum", (lv, x, q))
+        return q, (tuple(lay[0][r] for r in kept), tuple(lay[1][r] for r in kept))
+
+    def diag_sum(self, q: Prog, lay: Layout, second: int) -> Prog:
+        """``sum_x q`` with output register ``i`` and register ``second + i`` read as one summed
+        variable each."""
+        levels = self.levels(lay)
+        sums: list[tuple[Y.DMon, int]] = []
+        for i in range(len(lay[0])):
+            x = self.low_var()
+            q = Prog("sub", (i, Y.ip_v(x), Prog("sub", (second + i, Y.ip_v(x), q))))
+            sums.append((levels[i], x))
+        for lv, x in reversed(sums):
+            q = Prog("sum", (lv, x, q))
+        return q
+
+    def on_regs(self, node: object, lay: Layout, regs: Sequence[int]) -> Prog:
+        """The kernel of the operator ``node`` on the consecutive registers ``regs``, the
+        identity on the others."""
+        k = len(lay[0])
+        lo, hi = min(regs), max(regs) + 1
+        if sorted(regs) != list(range(lo, hi)):
+            raise CertifyError("a measurement basis on registers that are not consecutive")
+        mid = (lay[0][lo:hi], lay[1][lo:hi])
+        q, out = self.op(node, mid)
+        self.match(out, mid)
+        if hi < k:
+            q = Prog("ten", (hi - lo, q, self.ident((lay[0][hi:], lay[1][hi:]))))
+        if lo > 0:
+            q = Prog("ten", (lo, self.ident((lay[0][:lo], lay[1][:lo])), q))
+        return q
+
+    def dephase(self, v: Prog, lay: Layout, regs_node: object, basis: object) -> Prog:
+        """``sum_k P_k rho P_k``, ``P_k = B|k><k|B^dagger`` on the registers ``regs_node``."""
+        k = len(lay[0])
+        regs = self.regs(regs_node, k)
+        levels = self.levels(lay)
+        b = None
+        if basis is not None:
+            b = self.on_regs(basis, lay, regs)
+            v = self.conj_by(self.adjoint(b, lay), v, lay)
+        dels = tuple((levels[r], Y.ip_sub(Y.ip_v(r), Y.ip_v(k + r))) for r in regs)
+        v = Prog("mul", (Prog("leaf", ([(Y.of_q(1), (), (), dels, ())],)), v))
+        if b is not None:
+            v = self.conj_by(b, v, lay)
+        return v
+
+    def dmap(self, node: object, v: Prog, lay: Layout) -> tuple[Prog, Layout]:
+        """A channel or an operator applied to the vectorised ``v``."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Juxt) and self.is_channel(node):
+            v, lay = self.dmap(node.right, v, lay)
+            return self.dmap(node.left, v, lay)
+        if isinstance(node, L.Name) and node.id in self.channels:
+            self.trace_preserving(node.id, self.channels[node.id], lay)
+            return self.kraus(self.channels[node.id], v, lay), lay
+        if isinstance(node, L.Call) and node.name in ("depolarize", "dephase", "amp_damp"):
+            tree = self.builtin_kraus(node, lay)
+            self.trace_preserving(node.name, tree, lay)
+            return self.kraus(tree, v, lay), lay
+        kq, kout = self.op(node, lay)
+        self.match(kout, lay)
+        return self.conj_by(kq, v, lay), lay
+
+    def builtin_kraus(self, node: Any, lay: Layout) -> object:
+        """The Kraus operators of a built-in channel as a tree, for a concrete parameter."""
+        par = self.reader.scalar(node.args[0], {})
+        if par.free_symbols:
+            raise CertifyError(
+                f"{node.name}({par}): the Kraus amplitude sqrt(1 - {par}) of a symbolic "
+                "parameter is outside the certified amplitudes"
+            )
+        if len(lay[0]) != 1:
+            raise CertifyError(f"{node.name} on several registers")
+        d = f"({sympy.sstr(lay[1][0] ** lay[0][0])})"
+        q = f"({sympy.sstr(par)})"
+        text = {
+            "depolarize": (
+                f"{{sqrt(1 - {q}) I, sum(a in 0..{d}){{ sum(b in 0..{d}){{ sqrt({q})/{d} "
+                f"matrix(r, c in 0..{d}){{ ifelse(r == (c + a) % {d}, 1, 0) "
+                f"* e^(2*pi*i*b*c/{d}) }} }} }} }}"
+            ),
+            "dephase": f"{{sqrt(1 - {q}) I, sum(k in 0..{d}){{ sqrt({q}) |k>_{d}<k|_{d} }}}}",
+            "amp_damp": (
+                f"{{sqrt(1 - {q}) I + (1 - sqrt(1 - {q})) |0>_{d}<0|_{d}, "
+                f"sum(j in 0..{d}){{ sqrt({q}) (1 - ifelse(j == 0, 1, 0)) |0>_{d}<j|_{d} }}}}"
+            ),
+        }[node.name]
+        return self.parse(text)
+
+    def trace_preserving(self, name: str, tree: object, lay: Layout) -> None:
+        """The theorem ``sum_k K_k^dagger K_k = I`` of a channel, as a side obligation when the
+        mirror predicts its proof."""
+        try:
+            tp = self.kraus_tp(tree, lay)
+        except CertifyError:
+            return
+        for unit in (self.ident(lay), self.concrete_ident(lay)):
+            if unit is not None and self.holds(tp, unit):
+                rhs = prog_sym(unit, self.floors(), self.vs.pw) or []
+                self.side_obls.append((f"the channel {name} is trace preserving", tp, rhs))
+                return
+
+    def kraus_tp(self, node: object, lay: Layout) -> Prog:
+        """``sum_k K_k^dagger K_k`` over the Kraus operators of the tree ``node``."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Call) and node.name in ("depolarize", "dephase", "amp_damp"):
+            return self.kraus_tp(self.builtin_kraus(node, lay), lay)
+        if isinstance(node, L.Name) and node.id in self.channels:
+            return self.kraus_tp(self.channels[node.id], lay)
+        if isinstance(node, L.SetNode):
+            parts = [self.kraus_tp(item, lay) for item in node.items]
+            out = parts[0]
+            for q in parts[1:]:
+                out = Prog("add", (out, q))
+            return out
+        if isinstance(node, L.SumNode):
+            lo = self.reader.scalar(node.lo, {})
+            hi = self.reader.scalar(node.hi, {}) + (1 if node.inclusive else 0)
+            if lo != 0:
+                raise CertifyError("a Kraus family that does not start at 0")
+            sym = sympy.Dummy(node.var, integer=True)
+            x = self.low_var()
+            self.vs.ids[sym] = x
+            self.vs.ranges[x] = hi
+            saved = self.reader.values
+            self.reader.values = {**saved, node.var: sym}
+            try:
+                body = self.kraus_tp(node.body, lay)
+            finally:
+                self.reader.values = saved
+            return Prog("sum", (self.vs.dmon(hi), x, body))
+        kq, kout = self.op(node, lay)
+        self.match(kout, lay)
+        return Prog("app", (self.levels(lay), self.adjoint(kq, lay), kq))
+
+    def kraus(self, node: object, v: Prog, lay: Layout) -> Prog:
+        """``sum_k K_k rho K_k^dagger`` over the Kraus operators of the tree ``node``."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Call) and node.name in ("depolarize", "dephase", "amp_damp"):
+            return self.kraus(self.builtin_kraus(node, lay), v, lay)
+        if isinstance(node, L.Name) and node.id in self.channels:
+            return self.kraus(self.channels[node.id], v, lay)
+        if isinstance(node, L.SetNode):
+            parts = [self.kraus(item, v, lay) for item in node.items]
+            out = parts[0]
+            for q in parts[1:]:
+                out = Prog("add", (out, q))
+            return out
+        if isinstance(node, L.SumNode):
+            lo = self.reader.scalar(node.lo, {})
+            hi = self.reader.scalar(node.hi, {}) + (1 if node.inclusive else 0)
+            if lo != 0:
+                raise CertifyError("a Kraus family that does not start at 0")
+            sym = sympy.Dummy(node.var, integer=True)
+            x = self.low_var()
+            self.vs.ids[sym] = x
+            self.vs.ranges[x] = hi
+            saved = self.reader.values
+            self.reader.values = {**saved, node.var: sym}
+            try:
+                body = self.kraus(node.body, v, lay)
+            finally:
+                self.reader.values = saved
+            return Prog("sum", (self.vs.dmon(hi), x, body))
+        kq, kout = self.op(node, lay)
+        self.match(kout, lay)
+        return self.conj_by(kq, v, lay)
+
+    def op_trace(self, q: Prog, lay: Layout) -> Prog:
+        """``sum_x A(x, x)`` of an operator kernel."""
+        return self.diag_sum(q, lay, IN)
+
+    def inverse(self, node: object, lay: Layout, label: str) -> Prog:
+        """The inverse of an operator ``U``: its adjoint when ``U^dagger U = I``, else the
+        transpose of a monomial kernel with its coefficient inverted, else the exact inverse of
+        an explicit matrix; ``V U = I`` is a side obligation."""
+        q, out = self.op(node, lay)
+        self.match(out, lay)
+        ident = self.ident(lay)
+        levels = self.levels(lay)
+        title = f"{label}^-1 {label} = I"
+        cands: list[tuple[str, Callable[[], Prog | None]]] = [
+            ("its adjoint", lambda: self.adjoint(q, lay))
+        ]
+        cands.append(
+            (
+                "the transpose of its kernel, coefficients inverted",
+                lambda: self.monomial_inverse(q, lay),
+            )
+        )
+        cands.append(("the inverse of its matrix", lambda: self.matrix_inverse(node, lay)))
+        for how, make in cands:
+            try:
+                v = make()
+            except CertifyError:
+                continue
+            if v is None:
+                continue
+            left = Prog("app", (levels, v, q))
+            for unit in (ident, self.concrete_ident(lay)):
+                if unit is not None and self.holds(left, unit):
+                    rhs = prog_sym(unit, self.floors(), self.vs.pw) or []
+                    self.side_obls.append((f"{title}: the inverse of {label} is {how}", left, rhs))
+                    return v
+        raise CertifyError(f"the inverse of {label}: no certified left inverse")
+
+    def concrete_ident(self, lay: Layout) -> Prog | None:
+        """``sum_v [o = v][x = v]`` on one register of at most 16 levels."""
+        if len(lay[0]) != 1:
+            return None
+        n = sympy.sympify(lay[1][0] ** lay[0][0])
+        if not (n.is_Integer and int(n) <= 16):
+            return None
+        return self.diag_leaf([sympy.Integer(1)] * int(n), lay)
+
+    def monomial_inverse(self, q: Prog, lay: Layout) -> Prog | None:
+        """``V(o, x) = [x = g(o)] / c(o)`` for the kernel ``U(o, x) = c(x) [o = g(x)]``."""
+        e = prog_sym(q, self.floors(), self.vs.pw)
+        if e is None or len(e) != 1 or e[0][1]:
+            return None
+        t = e[0]
+        cm = cm_inverse(t[0])
+        if cm is None:
+            return None
+        phs = tuple((dm, Y.ip_smul(-1, poly)) for dm, poly in t[4])
+        leaf = Prog("leaf", ([(cm, t[1], t[2], t[3], phs)],))
+        return Prog("ren", (swap_io(len(lay[0])), leaf))
+
+    def matrix_inverse(self, node: object, lay: Layout) -> Prog | None:
+        """The kernel of the exact inverse of a gate given by a matrix of concrete size."""
+        from diracula import lang as L
+
+        if "value" not in self.hooks:
+            return None
+        g = self.hooks["value"](node)
+        if getattr(g, "matrix", None) is None:
+            return None
+        m = sympy.Matrix(g.matrix())
+        det = p_tidy(m.det())
+        if det == 0:
+            return None
+        inv = (m.adjugate() / det).applyfunc(p_tidy)
+        rows = tuple(tuple(L.Num(inv[r, c]) for c in range(inv.cols)) for r in range(inv.rows))
+        name = f"{_op_label(node)}_inv"
+        tree = GateTree(
+            getattr(self.trees.get(_op_label(node)), "slots", ()), L.MatrixNode(rows), name
+        )
+        prog, out = self.matrix_gate(name, tree, lay)
+        self.match(out, lay)
+        return prog
+
+    def power_loop(
+        self, op_node: object, cnt: sympy.Expr, init: Prog, lay: Layout, init_value: Any
+    ) -> Prog:
+        """``A^k |s>`` for a symbolic ``k`` as the loop of ``k`` steps of ``A`` from ``|s>``, its
+        invariant the engine's ``A^J |s>``."""
+        step, out = self.op(op_node, lay)
+        self.match(out, lay)
+        if "power" not in self.hooks:
+            raise CertifyError("a symbolic power without the engine's iterate")
+        j_sym = sympy.Symbol(f"J{len(self.vs.loops)}", integer=True, nonnegative=True)
+        try:
+            inv = self.hooks["power"](op_node, j_sym, init_value)
+        except Exception as exc:
+            raise CertifyError(f"the power has no closed-form iterate: {exc}") from exc
+        self.vs.loops.append(j_sym)
+        j = self.vs.var(j_sym)
+        inv_terms = state_terms(self.vs, self.reduced_params(inv, j_sym))
+        return Prog("loop", (self.levels(lay), j, 0, self.vs.count(cnt), step, init, inv_terms))
 
     def anchor(self, base: Any, k: Any) -> None:
         """Lowers the anchor offset of ``base^(n + c)`` for an exponent ``k = n + c``."""
@@ -3225,6 +4095,12 @@ class Certifier:
                 )
             )
         self.nrm_obls = []
+        for i, (title, prog, value) in enumerate(self.side_obls):
+            prog = self.declare(("side", i, title), f"side_{i}", title, prog)
+            d, pr = self.lit(prog, value, f"_s{i}", title)
+            extra.append(d)
+            more.append((title, f"{thm}_side_{i}", self.lit_stmt(prog, f"R_s{i}"), pr))
+        self.side_obls = []
         stmt, proof = self.assumed(stmt, proof)
         more = [
             (w, t, *self.assumed(st, pr))

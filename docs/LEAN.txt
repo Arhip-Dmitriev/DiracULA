@@ -103,11 +103,48 @@ Prog has the constructors
   cnj a                the complex conjugate
   loop L J lo cnt s i  s applied cnt times to i, iteration t reading J = lo + t
   sum D x b            Σ_{x<D} b: a sum of states over an index
+  ren m a              a read at ν ∘ rmap m: variable v read as w for each pair (v, w) of m
+  sub x v a            a read with variable x set to the value of the polynomial v
 
 A gate |x>... -> body becomes the kernel of its body: the output kets as deltas on the output
 registers, the input registers read as the pattern variables. U^@n on a register of n
 qudits, for a one-qudit kernel c ω_d^(α x y), is the digit-wise kernel c^n ω_d^(α ddot(x, y)).
 A ket value reduced modulo its register's levels is read as a delta modulo those levels.
+The adjoint U^dagger or adj(U) of an operator on k registers is cnj (ren m U), m exchanging
+output register i and input register i for i < k: its kernel is conj(U(x, o)). Prog.sym reads
+ren m a as the expression of a renamed by rmap m, for a program a without loops whose renaming
+is injective on every term (Prog.sym_ok, by axDen_ren), and sub x v a as the expression of a
+with x substituted by v (by axDen_tSub).
+
+The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read as follows.
+
+  Inverse U^-1, inv(U)  the adjoint, the transpose of a monomial kernel with its coefficient
+                        inverted, or the exact inverse of an explicit matrix; the file proves
+                        V U = I for the operator V used (a side theorem), so V is the inverse.
+  Power U^n, concrete   n applications of U, or of the inverse for n < 0.
+  Power U^k |s>, k      the loop of k steps of U from |s> (section 6.2), its invariant the
+  symbolic              engine's U^J |s>; proved by induction on k.
+  Density matrix        a ket |s> as ten k s (cnj s); a channel or gate K applied to it as app
+                        over both halves with the kernel ten k K (cnj K); a family of Kraus
+                        operators as a sum over its index.
+  tr(X, R), keep(X, R)  each traced pair of registers read as one summed variable (sub, sum),
+                        the kept registers renumbered (ren).
+  tr(X)                 the sum of the diagonal: <s|s> for a ket, the summed diagonal of a
+                        density matrix, sum_x A(x, x) of an operator kernel.
+  measure(|s>, R, B)    each branch's probability is the diagonal of the reduced density matrix
+                        of B^dagger rho B at the outcome; the probabilities sum to 1 and
+                        tr rho = 1; the density matrix left is sum_k P_k rho P_k, vectorised.
+  f(c A)                the interpolation sum_j f(c l_j) E_j on the eigenvalues of A, E_j a
+                        polynomial in A: (I +- A)/2 for A^2 = I, I - A and A for A^2 = A, and the
+                        projectors (1/m) sum_r w^(-j r) A^r for A^m = I; the file proves that
+                        polynomial identity of A (a side theorem). A diagonal A on one register
+                        of at most 4 levels is the kernel sum_v f(c a(v)) [o = v][x = v], with
+                        the theorem that A is that diagonal.
+
+A side theorem states that a channel is trace preserving, sum_k K_k^dagger K_k = I, when the
+normaliser proves it. A phase e^(i c t), cos(c t) or sin(c t) of a real symbol t and an
+integer c is read through the coefficient atom z = e^(i t), e^(-i t) as its conjugate atom; the
+theorem then holds for every nonzero z, in particular z = e^(i t).
 Each Lean definition carries the .ula line it translates as a comment.
 
 5. INTEGER ATOMS
@@ -190,6 +227,9 @@ Besides these moves, the normaliser
     [D ∣ s x + c u], s = ±1, D ∣ s + c;
   - under a delta [D ∣ s a + c b] equating two reduced atoms modulo a constant D, reads the atom
     of greater key as the other in the remaining factors;
+  - when no elimination applies, reads a bound variable x as another bound variable y of the
+    same range D under a delta [D ∣ x - y] (xPin): for x, y < D the delta holds only at x = y,
+    whatever else reads x;
   - orders the atom table canonically, each step the atom of least key among those that read
     no atom left, names the atoms by first occurrence in the factors and then in the table,
     renames bound variables by first occurrence and sorts the sums.
@@ -254,3 +294,23 @@ certify".
 Results that read rand, a branch on a value that is not concrete, or a state assigned from
 Python have no syntax tree to translate. Every other result of the examples and benchmarks is
 certified.
+
+10.2 Operations of DECARTES_SPEC.txt not yet certified
+Adjoints, inverses, integer and symbolic powers applied to states, traces, partial traces,
+partial and basis measurements, channels and their trace preservation, and functions of
+operators are certified (section 4). The following report "cannot certify":
+  - a partial trace over a register of symbolic width holding a repeated digit, such as
+    keep(|ghz>, 0) of |k>_d @ |k>_d^@(n-1): the delta [d^(n-1) ∣ (u - u') R] of the repunit R
+    is not reduced to [d ∣ u - u'];
+  - a power U^k whose iterate has amplitudes outside the coefficients, phases and atoms of
+    section 6.1, such as the rotation cos(k acos(1 - 2/2^n)) of the Grover iterate, and a
+    symbolic power of an operator not applied to a state;
+  - a function of an operator whose spectral form has such amplitudes: exp(i t sum_j Z_j) on a
+    symbolic number of qubits (an atom raised to a symbolic power), exp(i t S) of a shift
+    (e^(i t w^k)), and the trace closed by the quadratic Gauss sum (tr of a Fourier transform);
+  - a Kraus operator whose amplitude is the root of a symbolic parameter, such as
+    depolarize(p) for a symbolic p; for a concrete parameter it is certified;
+  - an explicit matrix whose eigenvalues are radicals (class F4 of LANGUAGE.txt, section 8.8);
+  - an operator named by gate G = EXPRESSION is translated through EXPRESSION; an assertion
+    between two states or two operators is certified only as a scalar equation, such as
+    <v|u> == 1.

@@ -30,6 +30,7 @@ CONTENTS
   17. Size symbols and binding
   18. Errors
   19. Complete example
+  20. Channels
 
 
 1. INTRODUCTION
@@ -72,13 +73,15 @@ A ket or bra, including its suffix, is a single token.
 
 2.3 Reserved words
 
-The following names cannot be used as variable, function, gate or state names:
+The following names cannot be used as variable, function, gate or state names. The word dagger
+is a keyword only directly after ^ (section 8.7).
 
   Statements    var func gate list show print measure seed for while if assert assume
-                certify
+                certify channel
   Keywords      xor in and or not else sum matrix
   Functions     sqrt exp abs floor ceil gcd min max bit dot powmod bitlen denom known ifelse
-                cos sin tan log arg rand normalise
+                cos sin tan log arg rand normalise adj inv tr keep depolarize dephase
+                amp_damp
   Constants     pi e i
   Styles        render plot unicode ascii latex
 
@@ -90,7 +93,7 @@ The following names cannot be used as variable, function, gate or state names:
 
 Statements are separated by newlines or by semicolons. A statement is one of:
 
-  - a declaration: var, func, gate, list;
+  - a declaration: var, func, gate, list, channel;
   - a state definition: |name> = expression, <name| = expression;
   - an in-place application: operators applied to a named state, U |name>;
   - an output statement: show, print;
@@ -267,7 +270,8 @@ A gate applied to a density matrix acts by conjugation, rho -> U rho U^dagger.
 8. GATES
 --------
 
-A gate is a linear operator defined in one of four ways.
+A gate is a linear operator defined in one of five ways: the four of sections 8.1 to 8.4, or as
+an operator expression, gate NAME = EXPRESSION (section 8.6).
 
 8.1 Basis maps
 
@@ -329,9 +333,88 @@ remaining register: (H @ I) applied to |0>|0>|0> applies H to the first register
     A + B        sum
     c A          scaling by a scalar
     |a><b|       outer product
-    A^n          integer power
+    A^n          integer power: concrete or symbolic, negative for powers of the inverse
+    A^t          a real or symbolic non-integer power (section 8.8)
+    A^dagger     adjoint; adj(A) is the same
+    A^-1         inverse; inv(A) is the same
+    sum(k in a..b){ A }    the sum of a family of operators
+    f(A)         a function of an operator: exp sqrt cos sin tan log (section 8.8)
 
-The conjugate transpose of a state is its bra (section 7.1).
+    gate G = (2 |s><s| - I) (I - 2 |w><w|)       names an operator expression
+
+The conjugate transpose of a state is its bra (section 7.1); |a>^dagger and adj(|a>) are the
+bra <a|.
+
+
+8.7 Adjoints, inverses and powers
+
+The adjoint of a basis map |x> -> sum_y a(x, y) |y> is the map |y> -> sum_x conj(a(x, y)) |x>,
+closed by the delta rules where the map is a bijection: the adjoint of |x>_d -> |(x + b) % d>_d
+is |x>_d -> |(x - b) % d>_d. The adjoint of a matrix is its conjugate transpose, and of the
+operator algebra (A B)^dagger = B^dagger A^dagger, (A @ B)^dagger = A^dagger @ B^dagger,
+(c A)^dagger = conj(c) A^dagger, (|a><b|)^dagger = |b><a|.
+
+The inverse of an operator proved unitary (A^dagger A == I reduces to true on the registers it
+meets) is its adjoint. A basis map |x> -> c(x) |g(x)> with c(x) not 0 is inverted when the
+engine solves y = g(x) and proves the candidate a left inverse; an explicit matrix by its
+adjugate and determinant. Otherwise:
+
+    error: cannot invert A: no closed-form inverse
+    error: cannot invert M: determinant D not known to be nonzero
+
+A^k for a symbolic k is the closed form of the k-th iterate when A is, on the registers it
+meets, one of
+
+    diagonal         |x> -> c(x) |x>             |x> -> c(x)^k |x>
+    affine           |x> -> |(a x + b) mod N>    |(a^k x + b (a^k - 1)/(a - 1)) mod N>
+    xor              |x> -> |x xor c>            |x xor c (k mod 2)>
+    permutation      of registers                a case split over k mod its order
+    involution       A^2 == I                    ((1 + (-1)^k)/2) I + ((1 - (-1)^k)/2) A
+    projector        A^2 == A                    [k = 0] I + (1 - [k = 0]) A
+    finite rank      alpha I + sum c |a><b|      alpha^k I plus the k-th power of its
+                                                 restriction to the span of the kets
+    finite order     A^m == I, m <= 8            a case split over k mod m
+
+or a scalar multiple, tensor product or product of commuting factors of these. A finite-rank
+operator whose restriction is a rotation is raised by its angle: for the Grover iterate
+G^k |s> is a rotation by k acos(1 - 2/2^n) (examples/symbolic_power.ula). A power of a symbol
+that may be negative uses a closed form valid for every integer, or splits on the sign of k
+when the inverse exists; otherwise
+
+    error: cannot raise A to the symbolic power k: no closed-form iterate
+    error: cannot raise A to the symbolic power k: A has no closed-form inverse; assume k >= 0
+
+
+8.8 Functions of operators
+
+f(A) = sum_j f(l_j) P_j over the spectral form A = sum_j l_j P_j, for f one of exp, sqrt, cos,
+sin, tan, log or a power A^t, principal branch. A scalar factor is taken into the eigenvalues:
+f(c A) uses c l_j. The spectral form is found, in order, for
+
+    F1  a diagonal basis map: f(A) is |x> -> f(c(x)) |x>;
+    F3  A^2 == I or A^2 == A: exp(i t X) = cos(t) I + i sin(t) X;
+    F2  an operator commuting with the shift of one register of N levels, diagonal in its
+        Fourier basis with eigenvalues <k|F^dagger A F|k>; V D V^dagger written so with V
+        proved unitary, kept factored;
+    F3  A^m == I or A^m == A for a concrete m <= 8, by interpolation on the roots of unity;
+    F4  an explicit matrix whose characteristic polynomial has factors of degree at most 4,
+        by its Jordan form in radicals;
+    F5  f(A @ I) = f(A) @ I; exp(A @ I + I @ B) = exp(A) @ exp(B); exp of a sum of pairwise
+        commuting operators; exp(c sum(j in 0..n){ I^@j @ A @ I^@(n - 1 - j) }) =
+        exp(c A)^@n for a symbolic n.
+
+An eigenvalue on the branch cut of sqrt, log or a power is noted with the value taken:
+
+    note: sqrt(SWAP) takes the principal branch at the eigenvalue -1: i
+
+Otherwise f(A) fails with one of
+
+    error: cannot compute f(A): no spectral form known for A
+    error: cannot compute f(A): characteristic polynomial of degree k not solvable in radicals
+    error: cannot compute f(A): A + B with non-commuting terms
+    error: cannot compute log(A): eigenvalue 0 of log
+
+No numerical value is ever substituted.
 
 
 9. EXPRESSIONS AND OPERATORS
@@ -458,6 +541,30 @@ applied to each outcome, and equal outcomes are merged:
 
 Two distributions that are not certain cannot be combined, since their correlation is not
 known; a certain distribution (one outcome of probability 1) acts as its value.
+
+11.4 Partial measurement and measurement bases
+
+    measure(|NAME>, R)       the Born distribution of the registers R only
+    measure(|NAME>, R, B)    the same in the basis {B|k>}, B a gate on the registers R
+
+R is one register position or a list {p, q, ...}; positions count the registers of the state
+from 0, first register first. The outcome is the value of the registers of R read together in
+the order of R, the first most significant. The distribution is p(k) = tr(P_k rho), computed
+as the partial trace over the other registers followed by the diagonal; in the basis B, rho is
+first conjugated by B^dagger on R. The named state becomes sum_k P_k rho P_k with
+P_k = B|k><k|B^dagger: registers outside R keep their coherence.
+
+11.5 Traces
+
+    tr(X)          the trace of a density matrix or of an operator; <a|a> for a ket |a>
+    tr(X, R)       the partial trace over the registers R, a density matrix
+    keep(X, R)     the partial trace over every register not in R
+
+A ket is read as its density matrix |a><a|. The partial trace closes [b = b'] on the traced
+registers with the delta rules; the trace of an operator is sum_x <x|A|x>, closed by deltas,
+geometric series, character sums and the quadratic Gauss sum, and otherwise left as a sum.
+Inside a trace every dimension symbol is at least 2. normalise divides a reduced state by its
+trace.
 
 
 12. COLLECTIONS AND OUTPUT
@@ -617,16 +724,30 @@ which is never sampled.
 16.2 State functions
 
   normalise(s)      s divided by its norm; a density matrix divided by its trace
+  tr(X), tr(X, R)   trace and partial trace (section 11.5)
+  keep(X, R)        partial trace over every register not in R
 
-16.3 Gates
+16.3 Operator functions
+
+  adj(A)            adjoint; also of a state, a density matrix or a scalar (conjugate)
+  inv(A)            inverse; also of a scalar
+  exp sqrt cos sin tan log     of an operator (section 8.8)
+
+16.4 Channels
+
+  depolarize(p)     rho -> (1 - p) rho + p I/d on one register of d levels
+  dephase(p)        rho -> (1 - p) rho + p sum_k |k><k| rho |k><k|
+  amp_damp(g)       amplitude damping to |0> with probability g
+
+16.5 Gates
 
   H X Y Z S T CNOT SWAP I       see section 8.5
 
-16.4 States
+16.6 States
 
   |+> |-> |i> |-i>              see section 7.3
 
-16.5 Constants
+16.7 Constants
 
   pi e i                        see section 9.4
 
@@ -679,3 +800,44 @@ Output (unicode style):
 
 The first register reads 1 with probability 1 for every n: the oracle is balanced.
 examples/deutsch_jozsa.ula shows every intermediate state.
+
+
+20. CHANNELS
+------------
+
+20.1 Definition
+
+    channel E = {K1, K2, ...}               Kraus operators, each an operator expression
+    channel E = sum(k in 0..m){ K(k) }      a symbolic family of Kraus operators
+    channel E = {K0, sum(k in 0..m){ K(k) }}
+
+A sum may be nested to give a family over several indices. A gate used where a channel is
+expected is the channel {U}.
+
+20.2 Application
+
+    E |NAME>            applies E in place; the state becomes a density matrix
+    E F, E @ F          composition (F first) and tensor product of channels
+
+E rho = sum_k K_k rho K_k^dagger; a ket is read as its density matrix first. Trace
+preservation, sum_k K_k^dagger K_k == I, is checked once per channel and layout: when it is
+false the application is an error,
+
+    error: channel E is not trace preserving
+
+and when it is undecided the channel is applied as written with a warning. An assume bounding
+a real parameter, assume p >= 0 and assume p <= 1, lets the check and the amplitudes use the
+range of p.
+
+20.3 Built-in channels
+
+depolarize(p), dephase(p) and amp_damp(g) act on one register of d levels, d read from the
+register they meet. Their Kraus operators are
+
+    depolarize(p)   sqrt(1 - p) I and sqrt(p)/d X^a Z^b, a, b in 0..d-1
+    dephase(p)      sqrt(1 - p) I and sqrt(p) |k><k|, k in 0..d-1
+    amp_damp(g)     sqrt(1 - g) I + (1 - sqrt(1 - g)) |0><0| and
+                    sqrt(g) (1 - [j = 0]) |0><j|, j in 0..d-1
+
+with X |x> = |(x + 1) mod d> and Z |x> = e^(2 pi i x/d) |x> the generalised Paulis.
+examples/channels.ula applies them.

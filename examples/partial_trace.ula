@@ -1,0 +1,10 @@
+# The reduced state of an n-qudit GHZ state on its first qudit, for every n >= 2 and d: the
+# maximally mixed state I/d.
+var n, d
+assume n >= 2
+
+|ghz>_d = 1/sqrt(d) sum(k in 0..d){ |k>_d @ |k>_d^@(n-1) }
+show(keep(|ghz>, 0))
+show(tr(|ghz>, 1))
+show(tr(|ghz>))
+show(tr(keep(|ghz>, 0)))

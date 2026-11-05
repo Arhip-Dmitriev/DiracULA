@@ -1,0 +1,13 @@
+# Measuring the first register of a Bell pair in the X basis: each outcome has probability 1/2
+# and the pair is left in the mixture of |++> and |-->. The same in the Fourier basis of a
+# qudit Bell pair of dimension d.
+|bell> = 1/sqrt(2) (|0>|0> + |1>|1>)
+var m = measure(|bell>, 0, H)
+show(m)
+show(|bell>)
+
+var d
+gate F = |x>_d -> 1/sqrt(d) sum(y in 0..d){ e^(2*pi*i*x*y/d) |y>_d }
+|bell_d>_d = 1/sqrt(d) sum(k in 0..d){ |k>_d @ |k>_d }
+var md = measure(|bell_d>, 0, F)
+show(md)

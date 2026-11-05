@@ -27,6 +27,8 @@ ships a Lean 4 library against which its results can be certified.
   diracula.pathsum     Values: symbolic path sums, operators, closed-form summation, Born
                        distributions and mixed states.
   diracula.lang        The parser and interpreter of the language.
+  diracula.operators   Adjoints, inverses, powers and functions of operators, traces, partial
+                       measurements and channels.
   diracula.display     Rendering of values in the unicode, ascii, latex and plot styles.
   diracula.zxsym       The structural translation of one path-sum term to a ZXW diagram.
   diracula.zxview      The ZX view of a state: sums of terms and literal vectors.
@@ -101,6 +103,17 @@ syntax, equals the printed closed form for every value of its size symbols (LEAN
     needs an identity the normaliser does not prove yet (LEAN.txt, section 10).
   - An amplitude outside the ZX scalar and phase grammar, such as cos(t) of a real symbol t,
     has no ZX view.
+  - A symbolic power of an operator outside the classes of LANGUAGE.txt, section 8.7, fails:
+    "cannot raise A to the symbolic power k: no closed-form iterate", or, for an exponent of
+    unknown sign without an inverse, "...: A has no closed-form inverse; assume k >= 0".
+  - A function of an operator outside the classes F1 to F5 of LANGUAGE.txt, section 8.8,
+    fails: "cannot compute f(A): no spectral form known for A", "characteristic polynomial of
+    degree k not solvable in radicals", "A + B with non-commuting terms" or "eigenvalue 0 of
+    log"; an eigenvalue on a branch cut is noted with the principal value taken, and no
+    numerical value is substituted.
+  - Results of the operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, whose
+    proof needs amplitudes outside the normaliser's grammar are not certified (LEAN.txt,
+    section 10.2).
   - The Python API is not yet stable between releases.
 
 

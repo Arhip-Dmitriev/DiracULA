@@ -1,0 +1,15 @@
+# Quantum channels: the depolarising channel on |+>, and the complete dephasing of a qudit of
+# dimension d written as a symbolic family of Kraus operators.
+var p: real
+assume p >= 0
+assume p <= 1
+
+|q> = |+>
+depolarize(p) |q>
+show(|q>)
+
+var d
+channel E = sum(k in 0..d){ |k>_d<k|_d }
+|r>_d = 1/sqrt(d) sum(k in 0..d){ |k>_d }
+E |r>
+show(|r>)

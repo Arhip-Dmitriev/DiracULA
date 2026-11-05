@@ -1,0 +1,16 @@
+# Adjoints and inverses, for every dimension d: the Fourier transform undone by its adjoint,
+# and n inverse steps of an affine shift, |x> -> |x - n b mod d>.
+var d, x, n, b
+assume x < d
+
+gate QFT = |y>_d -> 1/sqrt(d) sum(k in 0..d){ e^(2*pi*i*y*k/d) |k>_d }
+gate A = |y>_d -> |(y + b) % d>_d
+
+|v>_d = |x>_d
+show(QFT^dagger |v>)
+|u>_d = QFT^dagger QFT |v>
+show(|u>)
+assert <v|u> == 1
+
+show(A^-1 |x>_d)
+show((A^-1)^n |x>_d)

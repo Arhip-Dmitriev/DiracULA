@@ -67,6 +67,12 @@ with m = 0 for u = |0>, m = 1 when every |u_k| = 1, and otherwise m even, m >= m
 phases coming in pairs arg u_k +- acos(|u_k| / m).
 
 A density matrix is drawn from its vectorisation: the ket registers, then the bra registers.
+A reduced state, tr(X, R) or keep(X, R), is drawn from the vectorisation of its closed form:
+the doubled diagram of the state with the wires of R capped, after the cap is closed. The
+adjoint of a state is its bra, the mirror image of its diagram with conjugated phases; an
+adjoint or function of an operator is drawn as the image of a basis ket, like any operator.
+A value whose amplitudes leave the ZX grammar, such as cos(t) of a real t in exp(i t X), has no
+ZX view; a channel and a trace that is a scalar have none either.
 
 A state with no structural translation raises ZXViewError; the shell then reports that the
 state has no ZX diagram.

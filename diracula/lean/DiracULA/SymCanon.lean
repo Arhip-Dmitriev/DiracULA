@@ -429,13 +429,24 @@ noncomputable def optPh (dv : ℕ → ℕ) (ν : ℕ → ℤ) : Option Fac → �
   | none => 1
   | some f => phV dv ν f
 
-/-- A root of unity normalised: a constant one becomes a coefficient. -/
+/-- The constant term of a polynomial at its head and the rest. -/
+def ipSplitC : IPoly → ℤ × IPoly
+  | ([], c) :: l => (c, l)
+  | p => (0, p)
+
+theorem ipSplitC_ok (ν : ℕ → ℤ) (p : IPoly) :
+    ipDen ν p = (ipSplitC p).1 + ipDen ν (ipSplitC p).2 := by
+  unfold ipSplitC
+  split <;> simp [ipDen, imDen]
+
+/-- A root of unity normalised: a constant one, and the constant term of one of constant order,
+become a coefficient. -/
 def normPh (f : Fac) : CMon × Option Fac :=
   if f.1.isConst ∧ f.1.c ≠ 0 then
     let p := ipModC f.1.c f.2
     match ipConst p with
     | some c => (CMon.exQ ((c : ℚ) / f.1.c), none)
-    | none => (CMon.ofQ 1, some (f.1, p))
+    | none => (CMon.exQ (((ipSplitC p).1 : ℚ) / f.1.c), some (f.1, (ipSplitC p).2))
   else if f.2 = [] then (CMon.ofQ 1, none) else (CMon.ofQ 1, some f)
 
 theorem om_zpow_ex (c : ℕ) (k : ℤ) : om c ^ k = ex (((k : ℚ) / c : ℚ) : ℝ) := by
@@ -463,7 +474,9 @@ theorem normPh_ok (ρ : Val) (f : Fac) (ν : ℕ → ℤ) :
     · next c hcst =>
       rw [hmod]
       simp only [optPh, mul_one, exQ_den, phV, hc, ipConst_spec _ c hcst, om_zpow_ex]
-    · simp only [optPh, ofQ_den, Rat.cast_one, one_mul]; exact hmod
+    · rw [hmod]
+      simp only [optPh, exQ_den, phV, hc]
+      rw [ipSplitC_ok ν (ipModC f.1.c f.2), zpow_add₀ (om_ne_zero _ hpos), om_zpow_ex]
   · simp only [optPh, ofQ_den, Rat.cast_one, one_mul, phV, h2, ipDen_nil, zpow_zero]
   · simp [optPh, ofQ_den]
 
@@ -490,7 +503,25 @@ theorem normPhs_ok (ρ : Val) (hρ : ρ.OK) (l : List Fac) (ν : ℕ → ℤ) :
 /-- A root of unity merged into one of its order. -/
 def phIns (f : Fac) : List Fac → List Fac
   | [] => [f]
-  | g :: l => if g.1 = f.1 then (g.1, ipAdd g.2 f.2) :: l else g :: phIns f l
+  | g :: l =>
+    if g.1 = f.1 then (g.1, ipAdd g.2 f.2) :: l
+    else if g.1.isConst ∧ f.1.isConst ∧ g.1.c ≠ 0 ∧ f.1.c ≠ 0 then
+      (⟨Nat.lcm g.1.c f.1.c, []⟩, ipAdd (ipSmul (Nat.lcm g.1.c f.1.c / g.1.c : ℕ) g.2)
+        (ipSmul (Nat.lcm g.1.c f.1.c / f.1.c : ℕ) f.2)) :: l
+    else g :: phIns f l
+
+theorem om_lcm (a L : ℕ) (ha : 0 < a) (hL : 0 < L) (hd : a ∣ L) (x : ℤ) :
+    om a ^ x = om L ^ (((L / a : ℕ) : ℤ) * x) := by
+  obtain ⟨k, rfl⟩ := hd
+  have hk : 0 < k := Nat.pos_of_ne_zero (by rintro rfl; simp at hL)
+  rw [Nat.mul_div_cancel_left _ ha]
+  unfold om
+  rw [← Complex.exp_int_mul, ← Complex.exp_int_mul]
+  congr 1
+  have ha' : (a : ℂ) ≠ 0 := by exact_mod_cast ha.ne'
+  have hk' : (k : ℂ) ≠ 0 := by exact_mod_cast hk.ne'
+  push_cast
+  field_simp
 
 /-- Roots of unity of one order merged. -/
 def phMerge (ps : List Fac) : List Fac := ps.foldl (fun acc f => phIns f acc) []
@@ -504,6 +535,17 @@ theorem phIns_ok (dv : ℕ → ℕ) (ν : ℕ → ℤ) (f : Fac) (l : List Fac) 
     split_ifs with h
     · simp only [List.map_cons, List.prod_cons, phV, ipDen_add, h]
       rw [zpow_add₀ (show om (f.1.den dv) ≠ 0 from Complex.exp_ne_zero _)]; ring
+    · rename_i hc
+      obtain ⟨hg, hf, hg0, hf0⟩ := hc
+      have hl0 : 0 < Nat.lcm g.1.c f.1.c := Nat.lcm_pos (Nat.pos_of_ne_zero hg0) (Nat.pos_of_ne_zero hf0)
+      have hL : (⟨Nat.lcm g.1.c f.1.c, []⟩ : DMon).den dv = Nat.lcm g.1.c f.1.c := by
+        simp [DMon.den, npow]
+      simp only [List.map_cons, List.prod_cons, phV, ipDen_add, ipDen_smul, hL,
+        DMon.den_isConst dv _ hg, DMon.den_isConst dv _ hf]
+      rw [zpow_add₀ (show om (Nat.lcm g.1.c f.1.c) ≠ 0 from Complex.exp_ne_zero _),
+        ← om_lcm _ _ (Nat.pos_of_ne_zero hg0) hl0 (Nat.dvd_lcm_left _ _),
+        ← om_lcm _ _ (Nat.pos_of_ne_zero hf0) hl0 (Nat.dvd_lcm_right _ _)]
+      ring
     · simp only [List.map_cons, List.prod_cons, ih]; ring
 
 theorem phMerge_ok (dv : ℕ → ℕ) (ν : ℕ → ℤ) (ps : List Fac) :

@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import DiracULA.LDigit
+import DiracULA.LTable
 
 /-!
 # The normaliser of symbolic sums with atoms
@@ -45,7 +45,16 @@ def aElimVar (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (
   | none =>
     match elimPin x D ats ds ps with
     | some e => some e
-    | none => elimDigit PW x D ats ds ps
+    | none =>
+      match elimDigit PW x D ats ds ps with
+      | some e => some e
+      | none =>
+        match elimPinC x D ats ds ps with
+        | some e => some e
+        | none =>
+          match elimPinA x D ats ds ps with
+          | some e => some e
+          | none => elimLinC PW x D ats ds ps
 
 theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) (e : AElim)
@@ -55,7 +64,16 @@ theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
   · next e' he => simp only [Option.some.injEq] at h; subst h; exact elimPlain_ok V hρ _ _ _ _ _ _ he
   · split at h
     · next e' he => simp only [Option.some.injEq] at h; subst h; exact elimPin_ok V hρ _ _ _ _ _ _ he
-    · exact elimDigit_ok V hρ PW hPW _ _ _ _ _ _ h
+    · split at h
+      · next e' he =>
+        simp only [Option.some.injEq] at h; subst h; exact elimDigit_ok V hρ PW hPW _ _ _ _ _ _ he
+      · split at h
+        · next e' he =>
+          simp only [Option.some.injEq] at h; subst h; exact elimPinC_ok V _ _ _ _ _ _ he
+        · split at h
+          · next e' he =>
+            simp only [Option.some.injEq] at h; subst h; exact elimPinA_ok V hρ _ _ _ _ _ _ he
+          · exact elimLinC_ok V hρ PW hPW _ _ _ _ _ _ h
 
 /-- One elimination of a bound variable, the first that applies. -/
 def aElimStep (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
@@ -202,7 +220,8 @@ def dzPoly (PW : List (DMon × DMon)) (ats : List Atom) (a : Atom) : Option (DMo
         else none
       | none => none
     | [d, N], [c, c'], [(A1, M1), (A2, M2), (Bp, M3)] =>
-      if (d, N) ∈ PW ∧ M1 = N ∧ M2 = N ∧ M3 = d ∧ (c = 1 ∨ c = -1) ∧ c' = -c ∧
+      if (d, N) ∈ PW ∧ M1 = N ∧ M2 = N ∧ M3 = d ∧ (c = 1 ∨ c = -1) ∧
+          (c' = -c ∨ (d.isConst = true ∧ (c + c') % (d.c : ℤ) = 0)) ∧
           ipConst Bp = some 0 ∧ plainP ats A1 = true ∧ plainP ats A2 = true then
         some (N, ipSub A1 A2) else none
     | _, _, _ => none
@@ -352,7 +371,7 @@ theorem dzPoly_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (ats
     obtain ⟨h1, h2⟩ := h
     subst N; subst P
     obtain ⟨hpw, h3, h4, h5, hc1, h6, hb, -, -⟩ := hc
-    subst M1; subst M2; subst M3; subst c'
+    subst M1; subst M2; subst M3
     obtain ⟨hd2, n, hNn⟩ := hPW _ hpw
     have hd2' : 2 ≤ d.den V.ρ.dv := hd2
     have hNn' : N'.den V.ρ.dv = d.den V.ρ.dv ^ n := hNn
@@ -362,7 +381,14 @@ theorem dzPoly_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (ats
     rw [bfn3_two, hNn', pos_pow _ _ hd2', digits_zero _ n hdd _ fun i => ⟨Int.emod_nonneg _
       (by positivity), Int.emod_lt_of_pos _ (by positivity)⟩, ← digits_eq_int _ n hdd]
     refine dz_core _ n hd2' _ _ _ c hc1 (fun i => dig_lt _ i hdd _) (fun i => dig_lt _ i hdd _)
-      fun i hi => ⟨0, by split_ifs <;> ring⟩
+      fun i hi => ?_
+    simp only [ite_self, add_zero]
+    rcases h6 with h6 | ⟨hk, hm⟩
+    · subst h6; exact ⟨0, by ring⟩
+    · have hdiv : ((d.den V.ρ.dv : ℕ) : ℤ) ∣ c + c' := by
+        rw [DMon.den_isConst _ _ hk]; exact Int.dvd_of_emod_eq_zero hm
+      rw [show ∀ X : ℤ, c' * X + c * X = (c + c') * X from fun X => by ring]
+      exact Dvd.dvd.mul_right hdiv _
   · simp at h
 
 /-! ## Atom rules -/
@@ -742,11 +768,6 @@ theorem aRules_ok (V : LV) (n : ℕ) (t : ATm) : PWEq V t (aRules n t) := by
 
 /-! ## Free variables -/
 
-/-- Each atom's arguments read no atom of its own or a later position. -/
-def wfA : List Atom → Bool
-  | [] => true
-  | a :: l => (atVs a).all (fun v => !(ids (a :: l)).contains v) && wfA l
-
 theorem aext_agreeT (V : LV) (l : List Atom) (hl : wfA l = true) (T : List ℕ)
     (hT : ∀ v ∈ argVs l, v ∈ T ∨ v ∈ ids l) (μ μ' : ℕ → ℤ) (h : ∀ v ∈ T, μ v = μ' v) :
     ∀ v, v ∈ T ∨ v ∈ ids l → aext V l μ v = aext V l μ' v := by
@@ -831,7 +852,7 @@ def cmap (bl al : List ℕ) (v : ℕ) : ℕ :=
 
 /-- The term renamed canonically, when the renaming is injective. -/
 def canonRen (t : ATm) : ATm :=
-  let occ := uniq (fvs t ++ argVs t.ats ++ ids t.ats ++ abvs t)
+  let occ := uniq (fvs t ++ ids t.ats ++ argVs t.ats ++ abvs t)
   let bl := occ.filter fun v => (abvs t).contains v
   let al := occ.filter fun v => (ids t.ats).contains v && !(abvs t).contains v
   if injOn (cmap bl al) (allV t) && wfA t.ats then tRen (cmap bl al) t else t
@@ -1079,23 +1100,1622 @@ theorem modRules_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
       exact (modDropAt_ok V hρ fl hfl PW hPW t t' sp (splits_spec _ sp hsp) he).trans (ih t')
     · exact ⟨rfl, rfl, fun _ => rfl⟩
 
+/-! ## Constant atoms, exclusive or of bit patterns and shared atoms -/
+
+theorem wfA_append (l1 l2 : List Atom) (h : wfA (l1 ++ l2) = true) : wfA l1 = true := by
+  induction l1 with
+  | nil => rfl
+  | cons a l ih =>
+    obtain ⟨ha, hw⟩ := wfA_cons a (l ++ l2) h
+    simp only [wfA, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true', List.contains_eq_mem,
+      decide_eq_false_iff_not]
+    refine ⟨fun v hv hv' => ha v hv ?_, ih hw⟩
+    simp only [ids, List.map_cons, List.mem_cons, List.map_append, List.mem_append] at hv' ⊢
+    tauto
+
+/-- An atom replaced by one of the same variable whose value agrees after the atoms before it. -/
+theorem swap_pw (V : LV) (t : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (a' : Atom) (hid : a'.id = sp.2.1.id)
+    (hv : ∀ μ, aval V (aext V sp.1 μ) a' = aval V (aext V sp.1 μ) sp.2.1) :
+    PWEq V t ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩ := by
+  refine ⟨rfl, rfl, fun μ => ?_⟩
+  unfold abody
+  simp only
+  rw [hsp, aext_append, aext_append]
+  simp only [aext]
+  rw [hid, hv]
+
+/-- The value of an atom that is constant: `d^0 = 1` and the low `0` digits, `0`. -/
+def cstVal (a : Atom) : Option ℤ :=
+  match a.f, a.args with
+  | 7, [(p, _)] => if p = [] then some 1 else none
+  | 10, [_, (p, _)] => if p = [] then some 0 else none
+  | 2, [(p, M)] =>
+    match ipConst p with
+    | some c => if M.isConst then some (c % (M.c : ℤ)) else if c = 0 then some 0 else none
+    | none => none
+  | 13, [(p, _)] => if p = [] then some 0 else none
+  | _, _ => none
+
+theorem aval_cst (V : LV) (μ : ℕ → ℤ) (a : Atom) (c : ℤ) (h : cstVal a = some c) :
+    aval V μ a = c := by
+  unfold cstVal at h
+  split at h
+  · next p M hf hargs =>
+    split_ifs at h with hp
+    simp only [Option.some.injEq] at h
+    subst h hp
+    simp [aval, hf, hargs, bfn, argV, ipDen]
+  · next q p M hf hargs =>
+    split_ifs at h with hp
+    simp only [Option.some.injEq] at h
+    subst h hp
+    simp [aval, hf, hargs, bfn, argV, ipDen]
+  · next p M hf hargs =>
+    split at h
+    · next c hc =>
+      split_ifs at h with hM hc0
+      · simp only [Option.some.injEq] at h
+        subst h
+        simp [aval, hf, hargs, bfn, argV, ipConst_spec p c hc, DMon.den_isConst _ _ hM]
+      · simp only [Option.some.injEq] at h
+        subst h hc0
+        simp [aval, hf, hargs, bfn, argV, ipConst_spec p 0 hc]
+    · simp at h
+  · next p M hf hargs =>
+    split_ifs at h with hp
+    simp only [Option.some.injEq] at h
+    subst h hp
+    simp [aval, hf, hargs, bfn, argV, ipDen]
+  · simp at h
+
+/-- A constant atom at the split `p`, substituted by its value. -/
+def cstAt (t : ATm) (p : List Atom × Atom × List Atom) : Option ATm :=
+  match cstVal p.2.1 with
+  | some c =>
+    if (ids p.2.2).contains p.2.1.id then none else
+      some ⟨t.c, t.sums, p.1 ++ p.2.2.map (atSub p.2.1.id (ipC c)),
+        t.dels.map (facSub p.2.1.id (ipC c)), t.phs.map (facSub p.2.1.id (ipC c))⟩
+  | none => none
+
+theorem ipC_plain (l : List Atom) (c : ℤ) : plainP l (ipC c) = true := by
+  unfold plainP ipVs ipC ipIns; split_ifs <;> simp
+
+theorem ipC_has (x : ℕ) (c : ℤ) : ipHas x (ipC c) = false := by
+  unfold ipHas ipC ipIns; split_ifs <;> simp
+
+theorem cstAt_ok (V : LV) (t t' : ATm) (p : List Atom × Atom × List Atom)
+    (hp : t.ats = p.1 ++ p.2.1 :: p.2.2) (h : cstAt t p = some t') : PWEq V t t' := by
+  unfold cstAt at h
+  split at h
+  · next c hc =>
+    split_ifs at h with hz
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.not_eq_true, List.contains_eq_mem, decide_eq_false_iff_not] at hz
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody
+    simp only
+    rw [hp, aext_append, aext_append]
+    simp only [aext]
+    rw [aval_cst V _ _ c hc]
+    have e := aext_sub V p.2.2 p.2.1.id hz (ipC c) (ipC_plain _ c) (ipC_has _ c) (aext V p.1 μ)
+    rw [ipDen_C] at e
+    rw [e, bodyOf_sub, ipDen_C]
+  · simp at h
+
+/-- Exclusive or with a zero argument read as the other argument reduced. -/
+def xorZ (a : Atom) : Option Atom :=
+  match a.f, a.args with
+  | 1, [(p, M), (q, M2)] =>
+    if q = [] ∧ M.c ≠ 0 then some { a with f := 2, args := [(p, M)] }
+    else if p = [] ∧ M2.c ≠ 0 then some { a with f := 2, args := [(q, M2)] } else none
+  | _, _ => none
+
+theorem xorZ_ok (V : LV) (hρ : V.ρ.OK) (a a' : Atom) (h : xorZ a = some a') (μ : ℕ → ℤ) :
+    aval V μ a' = aval V μ a := by
+  unfold xorZ at h
+  split at h
+  · next p M q M2 hf hargs =>
+    split_ifs at h with h1 h2
+    · simp only [Option.some.injEq] at h
+      subst h
+      obtain ⟨rfl, hc⟩ := h1
+      have hpos : 0 < M.den V.ρ.dv := DMon.den_pos _ hρ.dpos _ (Nat.pos_of_ne_zero hc)
+      have h0 : 0 ≤ ipDen μ p % ((M.den V.ρ.dv : ℕ) : ℤ) := Int.emod_nonneg _ (by omega)
+      simp [aval, hf, hargs, bfn, argV, ipDen_nil, Int.toNat_of_nonneg h0]
+    · simp only [Option.some.injEq] at h
+      subst h
+      obtain ⟨rfl, hc⟩ := h2
+      have hpos : 0 < M2.den V.ρ.dv := DMon.den_pos _ hρ.dpos _ (Nat.pos_of_ne_zero hc)
+      have h0 : 0 ≤ ipDen μ q % ((M2.den V.ρ.dv : ℕ) : ℤ) := Int.emod_nonneg _ (by omega)
+      simp [aval, hf, hargs, bfn, argV, ipDen_nil, Int.toNat_of_nonneg h0]
+  · simp at h
+
+/-- The reduced argument `mod(p, M)` for a constant `M`, its coefficients reduced modulo `M`. -/
+def modC (a : Atom) : Option Atom :=
+  match a.f, a.args with
+  | 2, [(p, M)] =>
+    if M.isConst ∧ M.c ≠ 0 ∧ ipModC M.c p ≠ p then some { a with args := [(ipModC M.c p, M)] }
+    else none
+  | _, _ => none
+
+theorem modC_ok (V : LV) (a a' : Atom) (h : modC a = some a') (μ : ℕ → ℤ) :
+    aval V μ a' = aval V μ a := by
+  unfold modC at h
+  split at h
+  · next p M hf hargs =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    have hden : M.den V.ρ.dv = M.c := DMon.den_isConst _ _ hc.1
+    simp only [aval, hf, hargs, show (2 : ℕ) < 100 by norm_num, if_true, bfn, List.map_cons,
+      List.map_nil, argV, List.getD_cons_zero, hden]
+    exact Int.modEq_iff_dvd.2 (ipDen_modC μ M.c p)
+  · simp at h
+
+/-- A digit product with its arguments in canonical order. -/
+def ddotSwap (a : Atom) : Option Atom :=
+  match a.f, a.args with
+  | 0, [(p, M1), (q, M2)] =>
+    if zLt (ipKey q ++ dmKey M2) (ipKey p ++ dmKey M1) then
+      some { a with args := [(q, M2), (p, M1)] }
+    else none
+  | _, _ => none
+
+theorem ddotSwap_ok (V : LV) (a a' : Atom) (h : ddotSwap a = some a') (μ : ℕ → ℤ) :
+    aval V μ a' = aval V μ a := by
+  unfold ddotSwap at h
+  split at h
+  · next p M1 q M2 hf hargs =>
+    split_ifs at h
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [aval, hf, hargs, show (0 : ℕ) < 100 by norm_num, if_true, bfn, List.map_cons,
+      List.map_nil, List.getD_cons_zero, List.getD_cons_succ]
+    exact Finset.sum_congr rfl fun i _ => mul_comm _ _
+  · simp at h
+
+/-- A bit `mod(q, 2)`. -/
+def isBit (a : Atom) : Bool :=
+  a.f == 2 && match a.args with
+    | [(_, M)] => M == ⟨2, []⟩
+    | _ => false
+
+/-- A power of two. -/
+def isPw2 (a : Atom) : Bool := a.f == 7 && a.args.length == 1 && (a.dp == [] || a.dp == [⟨2, []⟩])
+
+/-- The atom of a table with variable `z`. -/
+def findAt (l : List Atom) (z : ℕ) : Option Atom := l.find? fun b => b.id == z
+
+/-- `(a xor c (P - 1)) xor c P` as `a xor c (2 P - 1)`, `c` a bit, `P` a power of two, every
+modulus a power of two. -/
+def xorX (PW : List (DMon × DMon)) (pre : List Atom) (o : Atom) : Option Atom :=
+  match o.f, o.args with
+  | 1, [(A, M1), (Bq, M2)] =>
+    match A, Bq with
+    | [([w], 1)], [([u, v], 1)] =>
+      match findAt pre w with
+      | some wa =>
+        match wa.f, wa.args with
+        | 1, [(a, Ma), (C1, Mb)] =>
+          if Ma = M1 ∧ Mb = M1 ∧ M2 = M1 ∧ (⟨2, []⟩, M1) ∈ PW then
+            if (findAt pre u).any isBit ∧ (findAt pre v).any isPw2 ∧
+                C1 = ipSub (ipMul (ipV u) (ipV v)) (ipV u) then
+              some { o with args := [(a, M1), (ipSub (ipSmul 2 (ipMul (ipV u) (ipV v))) (ipV u), M1)] }
+            else if (findAt pre v).any isBit ∧ (findAt pre u).any isPw2 ∧
+                C1 = ipSub (ipMul (ipV v) (ipV u)) (ipV v) then
+              some { o with args := [(a, M1), (ipSub (ipSmul 2 (ipMul (ipV v) (ipV u))) (ipV v), M1)] }
+            else none
+          else none
+        | _, _ => none
+      | none => none
+    | _, _ => none
+  | _, _ => none
+
+theorem xor_mod_pow (a b k : ℕ) : (a % 2 ^ k) ^^^ (b % 2 ^ k) = (a ^^^ b) % 2 ^ k := by
+  apply Nat.eq_of_testBit_eq; intro i
+  simp only [Nat.testBit_xor, Nat.testBit_mod_two_pow]
+  cases decide (i < k) <;> simp
+
+theorem pow_xor_pow (m : ℕ) : (2 ^ m - 1) ^^^ 2 ^ m = 2 ^ (m + 1) - 1 := by
+  apply Nat.eq_of_testBit_eq; intro i
+  simp only [Nat.testBit_xor, Nat.testBit_two_pow_sub_one, Nat.testBit_two_pow]
+  by_cases h : i < m
+  · simp [h, show m ≠ i by omega, show i < m + 1 by omega]
+  · by_cases h2 : m = i
+    · subst h2; simp
+    · simp [h, h2, show ¬ i < m + 1 by omega]
+
+theorem toNat_mod_pow (z : ℕ) (k : ℕ) :
+    ((z : ℤ) % ((2 ^ k : ℕ) : ℤ)).toNat = z % 2 ^ k := by
+  rw [← Int.natCast_mod, Int.toNat_natCast]
+
+theorem xor_step (A c N P : ℤ) (k m : ℕ) (hN : N = ((2 ^ k : ℕ) : ℤ))
+    (hP : P = ((2 ^ m : ℕ) : ℤ)) (hc : c = 0 ∨ c = 1) :
+    (((((((A % N).toNat ^^^ ((c * P - c) % N).toNat : ℕ) : ℤ) % N).toNat) ^^^ ((c * P) % N).toNat : ℕ) : ℤ) = (((A % N).toNat ^^^ ((2 * (c * P) - c) % N).toNat : ℕ) : ℤ) := by
+  subst hN hP
+  have hN : (0 : ℤ) < ((2 ^ k : ℕ) : ℤ) := by positivity
+  have ha : (A % ((2 ^ k : ℕ) : ℤ)).toNat < 2 ^ k := by
+    have := Int.emod_lt_of_pos A hN
+    have h0 := Int.emod_nonneg A hN.ne'
+    omega
+  have hm : 1 ≤ 2 ^ m := Nat.one_le_two_pow
+  rcases hc with rfl | rfl
+  · simp only [zero_mul, sub_zero, mul_zero, Int.zero_emod, Int.toNat_zero, Nat.xor_zero]
+    rw [toNat_mod_pow, Nat.mod_eq_of_lt ha]
+  · simp only [one_mul]
+    have e1 : ((2 ^ m : ℕ) : ℤ) - 1 = ((2 ^ m - 1 : ℕ) : ℤ) := by push_cast [hm]; ring
+    have e2 : 2 * ((2 ^ m : ℕ) : ℤ) - 1 = ((2 ^ (m + 1) - 1 : ℕ) : ℤ) := by
+      have : 1 ≤ 2 ^ (m + 1) := Nat.one_le_two_pow
+      push_cast [this]; ring
+    rw [e1, e2, toNat_mod_pow, toNat_mod_pow, toNat_mod_pow]
+    have hx : (A % ((2 ^ k : ℕ) : ℤ)).toNat ^^^ (2 ^ m - 1) % 2 ^ k < 2 ^ k :=
+      Nat.xor_lt_two_pow ha (Nat.mod_lt _ (by positivity))
+    rw [toNat_mod_pow, Nat.mod_eq_of_lt hx, Nat.xor_assoc, xor_mod_pow, pow_xor_pow]
+
+theorem findAt_spec (l : List Atom) (z : ℕ) (b : Atom) (h : findAt l z = some b) :
+    b ∈ l ∧ b.id = z := by
+  unfold findAt at h
+  exact ⟨List.mem_of_find?_eq_some h, by simpa using List.find?_some h⟩
+
+theorem xorX_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (pre : List Atom)
+    (hw : wfA pre = true) (hn : (ids pre).Nodup) (o o' : Atom) (h : xorX PW pre o = some o')
+    (μ : ℕ → ℤ) : aval V (aext V pre μ) o' = aval V (aext V pre μ) o := by
+  set E := aext V pre μ
+  have hfix : ∀ a ∈ pre, E a.id = aval V E a := aext_fix V pre hw hn μ
+  have hbit : ∀ y, (findAt pre y).any isBit = true → E y = 0 ∨ E y = 1 := by
+    intro y hy
+    cases hb : findAt pre y with
+    | none => simp [hb] at hy
+    | some b =>
+    rw [hb] at hy
+    have hbb := hy
+    simp only [Option.any_some] at hbb
+    obtain ⟨hbm, hid⟩ := findAt_spec pre y b hb
+    rw [← hid, hfix b hbm]
+    unfold isBit at hbb
+    simp only [Bool.and_eq_true, beq_iff_eq] at hbb
+    obtain ⟨hf, hb2⟩ := hbb
+    split at hb2
+    · next q M hargs =>
+      simp only [beq_iff_eq] at hb2
+      subst hb2
+      simp only [aval, hf, show (2 : ℕ) < 100 by norm_num, if_true, bfn, hargs, List.map_cons,
+        List.map_nil, argV, List.getD_cons_zero]
+      have : (DMon.den V.ρ.dv ⟨2, []⟩ : ℕ) = 2 := by simp [DMon.den, npow]
+      rw [this]
+      exact Int.emod_two_eq_zero_or_one _
+    · simp at hb2
+  have hpw : ∀ y, (findAt pre y).any isPw2 = true → ∃ m : ℕ, E y = ((2 ^ m : ℕ) : ℤ) := by
+    intro y hy
+    cases hb : findAt pre y with
+    | none => simp [hb] at hy
+    | some b =>
+    rw [hb] at hy
+    have hbb := hy
+    simp only [Option.any_some] at hbb
+    obtain ⟨hbm, hid⟩ := findAt_spec pre y b hb
+    rw [← hid, hfix b hbm]
+    unfold isPw2 at hbb
+    simp only [Bool.and_eq_true, beq_iff_eq, Bool.or_eq_true] at hbb
+    obtain ⟨⟨hf, -⟩, hdp⟩ := hbb
+    refine ⟨((b.args.map (argV V.ρ.dv E)).getD 0 0).toNat, ?_⟩
+    simp only [aval, hf, show (7 : ℕ) < 100 by norm_num, if_true, bfn]
+    rcases hdp with hdp | hdp <;> simp [hdp, DMon.den, npow]
+  unfold xorX at h
+  split at h
+  · next A M1 Bq M2 hf hargs =>
+    split at h
+    · next w u v =>
+      split at h
+      · next wa hwa =>
+        split at h
+        · next a Ma C1 Mb hwf hwargs =>
+          split_ifs at h with hm h1 h2
+          · simp only [Option.some.injEq] at h
+            subst h
+            obtain ⟨hMa, hMb, hM2, hpw2⟩ := hm
+            rw [hMa, hMb] at hwargs
+            rw [hM2] at hargs
+            obtain ⟨hu, hv, hC⟩ := h1
+            obtain ⟨-, k, hk⟩ := hPW _ hpw2
+            have h2 : DMon.den V.ρ.dv ⟨2, []⟩ = 2 := by simp [DMon.den, npow]
+            have hk' : M1.den V.ρ.dv = 2 ^ k := by rw [← h2]; exact hk
+            obtain ⟨hwm, hwid⟩ := findAt_spec pre w wa hwa
+            have hEw : E w = aval V E wa := by rw [← hwid, hfix wa hwm]
+            obtain ⟨m, hm⟩ := hpw v hv
+            have hc := hbit u hu
+            simp only [aval, hf, show (1 : ℕ) < 100 by norm_num, if_true, bfn, hargs,
+              List.map_cons, List.map_nil, argV, List.getD_cons_zero, List.getD_cons_succ]
+            have ew : ipDen E [([w], 1)] = E w := by simp [ipDen, imDen]
+            have euv : ipDen E [([u, v], 1)] = E u * E v := by simp [ipDen, imDen] <;> ring
+            rw [ew, euv, hEw]
+            simp only [aval, hwf, show (1 : ℕ) < 100 by norm_num, if_true, bfn, hwargs,
+              List.map_cons, List.map_nil, argV, List.getD_cons_zero, List.getD_cons_succ]
+            simp only [hC, ipDen_sub, ipDen_mul, ipDen_V, ipDen_smul, hk', hm]
+            exact (xor_step _ _ _ _ k m rfl rfl hc).symm
+          · simp only [Option.some.injEq] at h
+            subst h
+            obtain ⟨hMa, hMb, hM2, hpw2⟩ := hm
+            rw [hMa, hMb] at hwargs
+            rw [hM2] at hargs
+            obtain ⟨hv, hu, hC⟩ := h2
+            obtain ⟨-, k, hk⟩ := hPW _ hpw2
+            have h2 : DMon.den V.ρ.dv ⟨2, []⟩ = 2 := by simp [DMon.den, npow]
+            have hk' : M1.den V.ρ.dv = 2 ^ k := by rw [← h2]; exact hk
+            obtain ⟨hwm, hwid⟩ := findAt_spec pre w wa hwa
+            have hEw : E w = aval V E wa := by rw [← hwid, hfix wa hwm]
+            obtain ⟨m, hm⟩ := hpw u hu
+            have hc := hbit v hv
+            simp only [aval, hf, show (1 : ℕ) < 100 by norm_num, if_true, bfn, hargs,
+              List.map_cons, List.map_nil, argV, List.getD_cons_zero, List.getD_cons_succ]
+            have ew : ipDen E [([w], 1)] = E w := by simp [ipDen, imDen]
+            have euv : ipDen E [([u, v], 1)] = E v * E u := by simp [ipDen, imDen] <;> ring
+            rw [ew, euv, hEw]
+            simp only [aval, hwf, show (1 : ℕ) < 100 by norm_num, if_true, bfn, hwargs,
+              List.map_cons, List.map_nil, argV, List.getD_cons_zero, List.getD_cons_succ]
+            simp only [hC, ipDen_sub, ipDen_mul, ipDen_V, ipDen_smul, hk', hm]
+            exact (xor_step _ _ _ _ k m rfl rfl hc).symm
+        · simp at h
+      · simp at h
+    · simp at h
+  · simp at h
+
+/-- `(P - 1) xor P` as `mod(2 P - 1, N)`, `P` a power of two, `N` a power of two. -/
+def xorP (PW : List (DMon × DMon)) (pre : List Atom) (o : Atom) : Option Atom :=
+  match o.f, o.args with
+  | 1, [(A, M1), (Bq, M2)] =>
+    match Bq with
+    | [([z], 1)] =>
+      if M2 = M1 ∧ (⟨2, []⟩, M1) ∈ PW ∧ (findAt pre z).any isPw2 ∧ A = ipSub (ipV z) (ipC 1) then
+        some { o with f := 2, args := [(ipSub (ipSmul 2 (ipV z)) (ipC 1), M1)] }
+      else none
+    | _ => none
+  | _, _ => none
+
+theorem xorP_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (pre : List Atom)
+    (hw : wfA pre = true) (hn : (ids pre).Nodup) (o o' : Atom) (h : xorP PW pre o = some o')
+    (μ : ℕ → ℤ) : aval V (aext V pre μ) o' = aval V (aext V pre μ) o := by
+  set E := aext V pre μ
+  have hfix : ∀ a ∈ pre, E a.id = aval V E a := aext_fix V pre hw hn μ
+  unfold xorP at h
+  split at h
+  · next A M1 Bq M2 hf hargs =>
+    split at h
+    · next z =>
+      split_ifs at h with hc
+      simp only [Option.some.injEq] at h
+      subst h
+      obtain ⟨hM, hpw, hz, hA⟩ := hc
+      rw [hM, hA] at hargs
+      obtain ⟨-, k, hk⟩ := hPW _ hpw
+      have h2 : DMon.den V.ρ.dv ⟨2, []⟩ = 2 := by simp [DMon.den, npow]
+      rw [h2] at hk
+      have hm : ∃ m : ℕ, E z = ((2 ^ m : ℕ) : ℤ) := by
+        cases hb : findAt pre z with
+        | none => simp [hb] at hz
+        | some b =>
+        rw [hb] at hz
+        simp only [Option.any_some] at hz
+        obtain ⟨hbm, hid⟩ := findAt_spec pre z b hb
+        rw [← hid, hfix b hbm]
+        unfold isPw2 at hz
+        simp only [Bool.and_eq_true, beq_iff_eq, Bool.or_eq_true] at hz
+        obtain ⟨⟨hf7, -⟩, hdp⟩ := hz
+        refine ⟨((b.args.map (argV V.ρ.dv E)).getD 0 0).toNat, ?_⟩
+        simp only [aval, hf7, show (7 : ℕ) < 100 by norm_num, if_true, bfn]
+        rcases hdp with hdp | hdp <;> simp [hdp, DMon.den, npow]
+      obtain ⟨m, hm⟩ := hm
+      have hmp : 1 ≤ 2 ^ m := Nat.one_le_two_pow
+      have hB : ipDen E [([z], 1)] = E z := by simp [ipDen, imDen]
+      simp only [aval, hf, hargs, show (1 : ℕ) < 100 by norm_num, show (2 : ℕ) < 100 by norm_num,
+        if_true, bfn, List.map_cons, List.map_nil, argV, List.getD_cons_zero, List.getD_cons_succ,
+        ipDen_sub, ipDen_smul, ipDen_V, ipDen_C, hB, hm, hk]
+      have hz1 : ((2 ^ m : ℕ) : ℤ) - 1 = ((2 ^ m - 1 : ℕ) : ℤ) := by push_cast [hmp]; ring
+      have hz2 : 2 * ((2 ^ m : ℕ) : ℤ) - 1 = ((2 ^ (m + 1) - 1 : ℕ) : ℤ) := by
+        have : 1 ≤ 2 ^ (m + 1) := Nat.one_le_two_pow
+        push_cast [this]; ring
+      rw [hz1, hz2, toNat_mod_pow, toNat_mod_pow, xor_mod_pow, pow_xor_pow, Int.natCast_mod]
+    · simp at h
+  · simp at h
+
+/-- The exclusive or of bit patterns at the split `sp` combined. -/
+def xorAt (PW : List (DMon × DMon)) (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match xorX PW sp.1 sp.2.1 with
+  | some o' =>
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ o' :: sp.2.2, t.dels, t.phs⟩
+    else none
+  | none =>
+    match xorP PW sp.1 sp.2.1 with
+    | some o' =>
+      if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ o' :: sp.2.2, t.dels, t.phs⟩
+      else none
+    | none => none
+
+theorem xorAt_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t t' : ATm)
+    (p : List Atom × Atom × List Atom) (hsp : t.ats = p.1 ++ p.2.1 :: p.2.2)
+    (he : xorAt PW t p = some t') : PWEq V t t' := by
+  unfold xorAt at he
+  split at he
+  · next o' ho =>
+    split_ifs at he with hc
+    simp only [Option.some.injEq] at he; subst he
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    rw [hsp] at hc
+    have hw : wfA p.1 = true := wfA_append _ _ hc.1
+    have hn : (ids p.1).Nodup := (List.nodup_append.1 (by simpa [ids] using hc.2)).1
+    have hid : o'.id = p.2.1.id := by
+      unfold xorX at ho
+      repeat' (first | split at ho | split_ifs at ho)
+      all_goals first | (simp only [Option.some.injEq] at ho; rw [← ho]) | simp at ho
+    exact swap_pw V t p hsp o' hid fun μ => xorX_ok V PW hPW p.1 hw hn _ _ ho μ
+  · split at he
+    · next o' ho =>
+      split_ifs at he with hc
+      simp only [Option.some.injEq] at he; subst he
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+      rw [hsp] at hc
+      have hw : wfA p.1 = true := wfA_append _ _ hc.1
+      have hn : (ids p.1).Nodup := (List.nodup_append.1 (by simpa [ids] using hc.2)).1
+      have hid : o'.id = p.2.1.id := by
+        unfold xorP at ho
+        repeat' (first | split at ho | split_ifs at ho)
+        all_goals first | (simp only [Option.some.injEq] at ho; rw [← ho]) | simp at ho
+      exact swap_pw V t p hsp o' hid fun μ => xorP_ok V PW hPW p.1 hw hn _ _ ho μ
+    · simp at he
+
+/-- An in-place atom rule at the split `sp`. -/
+def swapAt (g : Atom → Option Atom) (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match g sp.2.1 with
+  | some a' => some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+  | none => none
+
+/-- An atom read by later atoms, read as an earlier atom computing the same value. -/
+def dedupA (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match sp.1.find? (fun a => a.id != sp.2.1.id && sameAt a sp.2.1) with
+  | some a =>
+    if (ids t.ats).Nodup && sp.2.1.args.all (fun p => plainP t.ats p.1) &&
+        (argVs sp.2.2).contains sp.2.1.id then
+      some ⟨t.c, t.sums, sp.1 ++ sp.2.2.map (atSub sp.2.1.id (ipV a.id)),
+        t.dels.map (facSub sp.2.1.id (ipV a.id)), t.phs.map (facSub sp.2.1.id (ipV a.id))⟩
+    else none
+  | none => none
+
+theorem dedupA_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (h : dedupA t sp = some t') : PWEq V t t' := by
+  unfold dedupA at h
+  split at h
+  · next a ha =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨⟨hnd, hpl⟩, -⟩ := hc
+    obtain ⟨ha1, ha2⟩ := List.find?_some ha |> fun h' => (⟨h', List.mem_of_find?_eq_some ha⟩ :
+      _ ∧ a ∈ sp.1)
+    simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, sameAt, beq_iff_eq] at ha1
+    obtain ⟨hid, ⟨⟨⟨hf, hks⟩, hdp⟩, hargs⟩⟩ := ha1
+    have hids : ids t.ats = ids sp.1 ++ ids (sp.2.1 :: sp.2.2) := by rw [hsp]; simp [ids]
+    have hnd2 := hnd
+    rw [hids] at hnd2
+    obtain ⟨hpre, hrest, hdisj⟩ := List.nodup_append.1 hnd2
+    have hbpost : sp.2.1.id ∉ ids sp.2.2 := (List.nodup_cons.1 (by simpa [ids] using hrest)).1
+    have hain : a.id ∈ ids sp.1 := by simp only [ids]; exact List.mem_map_of_mem ha2
+    have hapost : a.id ∉ ids sp.2.2 := fun h' =>
+      hdisj a.id hain a.id (by simp only [ids, List.map_cons, List.mem_cons] at h' ⊢; exact Or.inr h') rfl
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody
+    simp only
+    rw [hsp, aext_append, aext_append]
+    simp only [aext]
+    obtain ⟨μa, ha3, ha4⟩ := aext_find V sp.1 a.id a hpre (find_id _ hpre _ ha2) μ
+    set P := aext V sp.1 μ
+    have hval : aval V P sp.2.1 = P a.id := by
+      rw [ha3]
+      have : aval V P sp.2.1 = aval V μa sp.2.1 := by
+        refine aval_reads V _ _ _ fun y hy => ?_
+        simp only [atVs, List.mem_flatMap] at hy
+        obtain ⟨p, hp, hy⟩ := hy
+        have := hpl p hp
+        simp only [plainP, List.all_eq_true, Bool.not_eq_true', List.contains_eq_mem,
+          decide_eq_false_iff_not] at this
+        have hy1 : y ∉ ids sp.1 := fun h' => this y hy (by rw [hids]; exact List.mem_append_left _ h')
+        exact (aext_off V sp.1 μ y hy1).trans (ha4 y hy1).symm
+      rw [this]
+      unfold aval
+      rw [hf, hks, hdp, hargs]
+    rw [hval]
+    have hv : P a.id = ipDen P (ipV a.id) := by rw [ipDen_V]
+    have hpv : plainP sp.2.2 (ipV a.id) = true := by
+      simp only [plainP, ipVs, ipV, List.flatMap_cons, List.flatMap_nil, List.append_nil,
+        List.all_cons, List.all_nil, Bool.and_true, Bool.not_eq_true', List.contains_eq_mem,
+        decide_eq_false_iff_not]
+      exact hapost
+    have hhs : ipHas sp.2.1.id (ipV a.id) = false := by
+      simp [ipHas, ipV, Ne.symm hid]
+    have hapost' : a.id ∉ ids (sp.2.2.map (atSub sp.2.1.id (ipV a.id))) := by
+      simpa [ids, atSub, List.map_map, Function.comp_def] using hapost
+    rw [hv, aext_sub V sp.2.2 sp.2.1.id hbpost _ hpv hhs P, bodyOf_sub, ipDen_V, ipDen_V,
+      aext_off V _ _ _ hapost']
+  · simp at h
+
+/-- In a table in dependency order, an atom read as an earlier atom computing the same value in the
+factors. -/
+def dedupW (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match sp.1.find? (fun a => a.id != sp.2.1.id && sameAt a sp.2.1) with
+  | some a =>
+    if wfA t.ats && (ids t.ats).Nodup && (fvs t).contains sp.2.1.id then
+      some ⟨t.c, t.sums, t.ats, t.dels.map (facSub sp.2.1.id (ipV a.id)),
+        t.phs.map (facSub sp.2.1.id (ipV a.id))⟩
+    else none
+  | none => none
+
+theorem dedupW_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (h : dedupW t sp = some t') : PWEq V t t' := by
+  unfold dedupW at h
+  split at h
+  · next a ha =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨⟨hw, hnd⟩, -⟩ := hc
+    obtain ⟨ha1, ha2⟩ := List.find?_some ha |> fun h' => (⟨h', List.mem_of_find?_eq_some ha⟩ :
+      _ ∧ a ∈ sp.1)
+    simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, sameAt, beq_iff_eq] at ha1
+    obtain ⟨-, ⟨⟨⟨hf, hks⟩, hdp⟩, hargs⟩⟩ := ha1
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody
+    simp only
+    have hfix := aext_fix V t.ats hw hnd μ
+    have hbm : sp.2.1 ∈ t.ats := by rw [hsp]; simp
+    have ham : a ∈ t.ats := by rw [hsp]; exact List.mem_append_left _ ha2
+    have hval : aext V t.ats μ sp.2.1.id = aext V t.ats μ a.id := by
+      rw [hfix _ hbm, hfix _ ham]
+      unfold aval
+      rw [hf, hks, hdp, hargs]
+    rw [bodyOf_sub, ipDen_V, ← hval, Function.update_eq_self]
+  · simp at h
+
+/-- Under a delta `[M ∣ s o + B]`, `s = ±1`, the atom at the split `sp` read with `o` set to `-s B`,
+its arguments reading `o` reduced modulo divisors of `M`. -/
+def dsubAt (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match firstSome (fun o : ℕ =>
+      firstSome (fun f : Fac =>
+        match ipLin o f.2 with
+        | some (A, B) =>
+          match ipConst A with
+          | some s =>
+            if (s == 1 || s == -1) && f.1.c != 0 && !(ids t.ats).contains o &&
+                (ipVs B).all (fun y => !(ids (sp.2.1 :: sp.2.2)).contains y) &&
+                sp.2.1.args.all (fun p => !ipHas o p.1 || p.2.dvd f.1) then
+              some ⟨t.c, t.sums, sp.1 ++ atSub o (pinVal s B) sp.2.1 :: sp.2.2, t.dels, t.phs⟩
+            else none
+          | none => none
+        | none => none) t.dels) (atVs sp.2.1) with
+  | some t' => if wfA t.ats && (ids t.ats).Nodup then some t' else none
+  | none => none
+
+theorem dsubAt_ok (V : LV) (hρ : V.ρ.OK) (t t' : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (h : dsubAt t sp = some t') : PWEq V t t' := by
+  unfold dsubAt at h
+  split at h
+  swap
+  · simp at h
+  rename_i t'' hfs
+  split_ifs at h with hwn
+  simp only [Option.some.injEq] at h
+  subst h
+  have h := hfs
+  obtain ⟨o, -, h⟩ := firstSome_spec _ _ _ h
+  obtain ⟨f, hf, h⟩ := firstSome_spec _ _ _ h
+  split at h
+  · next A B hlin =>
+    split at h
+    · next s hs =>
+      split_ifs at h with hc
+      simp only [Option.some.injEq] at h
+      subst h
+      simp only [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq,
+        Bool.not_eq_true', List.contains_eq_mem, decide_eq_false_iff_not, List.all_eq_true] at hc
+      obtain ⟨⟨⟨⟨hs1, hc0⟩, hoi⟩, hB⟩, hargs⟩ := hc
+      obtain ⟨-, -, hp⟩ := ipLin_spec o f.2 A B hlin
+      have hsv : ∀ ν, ipDen ν A = s := fun ν => ipConst_spec A s hs ν
+      have hpos : 0 < f.1.den V.ρ.dv := DMon.den_pos _ hρ.dpos _ (Nat.pos_of_ne_zero hc0)
+      have hoi' : o ∉ ids (sp.2.1 :: sp.2.2) := fun h' => hoi (by
+        rw [hsp]; simp only [ids, List.map_append, List.mem_append] at h' ⊢; exact Or.inr h')
+      refine ⟨rfl, rfl, fun μ => ?_⟩
+      unfold abody
+      simp only
+      rw [hsp, aext_append, aext_append]
+      simp only [aext]
+      set P := aext V sp.1 μ
+      set v := pinVal s B
+      have hread : ∀ w : ℤ, ipDen (aext V sp.2.2 (Function.update P sp.2.1.id w)) f.2 =
+          s * P o + ipDen P B := by
+        intro w
+        rw [hp, hsv]
+        have h1 : aext V sp.2.2 (Function.update P sp.2.1.id w) o = P o := by
+          simp only [ids, List.map_cons, List.mem_cons, not_or] at hoi'
+          rw [aext_off V _ _ _ hoi'.2, Function.update_of_ne hoi'.1]
+        have h2 : ipDen (aext V sp.2.2 (Function.update P sp.2.1.id w)) B = ipDen P B := by
+          refine ipDen_reads B _ _ fun y hy => ?_
+          have := hB y hy
+          simp only [ids, List.map_cons, List.mem_cons, not_or] at this
+          rw [aext_off V _ _ _ this.2, Function.update_of_ne this.1]
+        rw [h1, h2]
+      by_cases hd : ((f.1.den V.ρ.dv : ℕ) : ℤ) ∣ s * P o + ipDen P B
+      · have hd' : ((f.1.den V.ρ.dv : ℕ) : ℤ) ∣ ipDen P v - P o := by
+          have := (pin_dvd s hs1 _ (P o) (ipDen P B)).1 hd
+          rw [show ipDen P v = -s * ipDen P B by simp [v, pinVal, ipDen_smul]]
+          exact (dvd_neg.2 this).trans (by ring_nf; exact dvd_refl _)
+        have hval : aval V P (atSub o v sp.2.1) = aval V P sp.2.1 := by
+          have : (atSub o v sp.2.1).args.map (argV V.ρ.dv P) = sp.2.1.args.map (argV V.ρ.dv P) := by
+            simp only [atSub, List.map_map]
+            refine List.map_congr_left fun p hpm => ?_
+            simp only [Function.comp_apply, argV, ipDen_subst]
+            have := argV_congr V.ρ.dv hρ.dpos o f.1 p (by simpa using hargs p hpm) P _ _ hd'
+            simp only [argV, Function.update_eq_self] at this
+            exact this
+          unfold aval; rw [this]; rfl
+        simp only [atSub] at hval ⊢
+        rw [hval]
+      · have hz : ∀ w : ℤ, bodyOf V.ρ.dv t.dels t.phs
+            (aext V sp.2.2 (Function.update P sp.2.1.id w)) = 0 := by
+          intro w
+          unfold bodyOf
+          rw [List.prod_eq_zero (List.mem_map.2 ⟨f, hf, by unfold delV; rw [hread w, if_neg hd]⟩),
+            zero_mul]
+        simp only [atSub]
+        rw [hz, hz]
+    · simp at h
+  · simp at h
+
+/-! ## Digit products of exclusive ors modulo two -/
+
+theorem atVsMk (id f : ℕ) (ks : List ℤ) (dp : List DMon) (args : List (IPoly × DMon)) :
+    atVs ⟨id, f, ks, dp, args⟩ = args.flatMap fun p => ipVs p.1 := rfl
+
+theorem dig2_xor (i x y : ℕ) : (x ^^^ y) / 2 ^ i % 2 = (x / 2 ^ i % 2 + y / 2 ^ i % 2) % 2 := by
+  have key : ∀ m : ℕ, m / 2 ^ i % 2 = if m.testBit i then 1 else 0 := by
+    intro m
+    rw [Nat.testBit_eq_decide_div_mod_eq]
+    have := Nat.mod_two_eq_zero_or_one (m / 2 ^ i)
+    rcases this with h | h <;> simp [h]
+  rw [key, key x, key y, Nat.testBit_xor]
+  cases x.testBit i <;> cases y.testBit i <;> simp
+
+theorem ddot2_xor (S : Finset ℕ) (x y c : ℕ) :
+    (2 : ℤ) ∣ (∑ i ∈ S, dig 2 i ((x ^^^ y : ℕ) : ℤ) * dig 2 i (c : ℤ)) -
+      ((∑ i ∈ S, dig 2 i (x : ℤ) * dig 2 i (c : ℤ)) + ∑ i ∈ S, dig 2 i (y : ℤ) * dig 2 i (c : ℤ)) := by
+  rw [← Finset.sum_add_distrib, ← Finset.sum_sub_distrib]
+  refine Finset.dvd_sum fun i _ => ?_
+  simp only [dig_nat, dig2_xor]
+  set a := x / 2 ^ i % 2
+  set b := y / 2 ^ i % 2
+  set c' := c / 2 ^ i % 2
+  have h' : (((a + b) % 2 : ℕ) : ℤ) = (a : ℤ) + b - 2 * (((a + b) / 2 : ℕ) : ℤ) := by omega
+  rw [h']
+  exact ⟨-(((a + b) / 2 : ℕ) : ℤ) * c', by ring⟩
+
+/-- The operands `(u, v)` of an exclusive or `X = w`, both reduced modulo `N`, `w` an atom of
+`pre`. -/
+def xorOf (pre : List Atom) (X : IPoly) (N : DMon) : Option (IPoly × IPoly) :=
+  match X with
+  | [([w], 1)] =>
+    match findAt pre w with
+    | some wa =>
+      match wa.f, wa.args with
+      | 1, [(u, Mu), (v, Mv)] => if Mu = N ∧ Mv = N then some (u, v) else none
+      | _, _ => none
+    | none => none
+  | _ => none
+
+/-- `ddot_{2,N}(u xor v, c)` as the atoms `ddot(u, c)` and `ddot(v, c)` from `B`, either argument
+an exclusive or. -/
+def dotXor (PW : List (DMon × DMon)) (pre : List Atom) (a : Atom) (B : ℕ) : Option (Atom × Atom) :=
+  match a.f, a.dp, a.args with
+  | 0, [d, N], [(X, M1), (Cp, M2)] =>
+    if d = ⟨2, []⟩ ∧ M1 = N ∧ M2 = N ∧ (⟨2, []⟩, N) ∈ PW then
+      match xorOf pre X N with
+      | some (u, v) => some (⟨B, 0, a.ks, [d, N], [(u, N), (Cp, N)]⟩,
+          ⟨B + 1, 0, a.ks, [d, N], [(v, N), (Cp, N)]⟩)
+      | none =>
+        match xorOf pre Cp N with
+        | some (u, v) => some (⟨B, 0, a.ks, [d, N], [(X, N), (u, N)]⟩,
+            ⟨B + 1, 0, a.ks, [d, N], [(X, N), (v, N)]⟩)
+        | none => none
+    else none
+  | _, _, _ => none
+
+theorem xorOf_spec (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre).Nodup)
+    (X : IPoly) (N : DMon) (u v : IPoly) (h : xorOf pre X N = some (u, v)) (μ : ℕ → ℤ) :
+    ipDen (aext V pre μ) X = (((argV V.ρ.dv (aext V pre μ) (u, N)).toNat ^^^
+      (argV V.ρ.dv (aext V pre μ) (v, N)).toNat : ℕ) : ℤ) ∧
+      ∀ y ∈ ipVs u ++ ipVs v, y ∈ argVs pre := by
+  unfold xorOf at h
+  split at h
+  · next w =>
+    split at h
+    · next wa hwa =>
+      split at h
+      · next u' Mu v' Mv hf hargs =>
+        split_ifs at h with hM
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨rfl, rfl⟩ := hM
+        obtain ⟨hwm, hwid⟩ := findAt_spec pre w wa hwa
+        refine ⟨?_, fun y hy => List.mem_flatMap.2 ⟨wa, hwm, ?_⟩⟩
+        · have : ipDen (aext V pre μ) [([w], 1)] = aext V pre μ w := by simp [ipDen, imDen]
+          rw [this, ← hwid, aext_fix V pre hw hn μ wa hwm]
+          simp only [aval, hf, show (1 : ℕ) < 100 by norm_num, if_true, bfn, hargs, List.map_cons,
+            List.map_nil, List.getD_cons_zero, List.getD_cons_succ]
+        · simp only [atVs, hargs, List.flatMap_cons, List.flatMap_nil, List.append_nil]
+          exact hy
+      · simp at h
+    · simp at h
+  · simp at h
+
+theorem dotXor_ok (V : LV) (hPW : PowOK PW V.ρ) (pre : List Atom) (hw : wfA pre = true)
+    (hn : (ids pre).Nodup) (a b1 b2 : Atom) (B : ℕ) (h : dotXor PW pre a B = some (b1, b2))
+    (μ : ℕ → ℤ) :
+    b1.id = B ∧ b2.id = B + 1 ∧ (∀ y ∈ atVs b1 ++ atVs b2, y ∈ atVs a ∨ y ∈ argVs pre) ∧
+      (2 : ℤ) ∣ aval V (aext V pre μ) a -
+        (aval V (aext V pre μ) b1 + aval V (aext V pre μ) b2) := by
+  unfold dotXor at h
+  split at h
+  · next d N X M1 Cp M2 hf hdp hargs =>
+    split_ifs at h with hc
+    obtain ⟨hd, hN, hM2, hpw⟩ := hc
+    subst hd
+    rw [hN, hM2] at hargs
+    obtain ⟨-, k, hk⟩ := hPW _ hpw
+    have h2 : DMon.den V.ρ.dv ⟨2, []⟩ = 2 := by simp [DMon.den, npow]
+    rw [h2] at hk
+    set E := aext V pre μ
+    have hlt : ∀ z : ℤ, (z % ((N.den V.ρ.dv : ℕ) : ℤ)).toNat < 2 ^ k := by
+      intro z
+      have hpos : (0 : ℤ) < ((N.den V.ρ.dv : ℕ) : ℤ) := by rw [hk]; positivity
+      have := Int.emod_lt_of_pos z hpos
+      have h0 := Int.emod_nonneg z hpos.ne'
+      rw [hk] at this h0 ⊢
+      omega
+    have hnn : ∀ z : ℤ, z % ((N.den V.ρ.dv : ℕ) : ℤ) =
+        (((z % ((N.den V.ρ.dv : ℕ) : ℤ)).toNat : ℕ) : ℤ) := fun z =>
+      (Int.toNat_of_nonneg (Int.emod_nonneg z (by rw [hk]; positivity))).symm
+    have hxor : ∀ x y : ℕ, x < 2 ^ k → y < 2 ^ k →
+        (((x ^^^ y : ℕ) : ℤ) % ((N.den V.ρ.dv : ℕ) : ℤ)) = ((x ^^^ y : ℕ) : ℤ) := fun x y hx hy =>
+      Int.emod_eq_of_lt (by positivity) (by rw [hk]; exact_mod_cast Nat.xor_lt_two_pow hx hy)
+    split at h
+    · next u v huv =>
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨hX, hvars⟩ := xorOf_spec V pre hw hn X N u v huv μ
+      refine ⟨rfl, rfl, fun y hy => ?_, ?_⟩
+      · simp only [atVsMk, List.mem_append, List.flatMap_cons, List.flatMap_nil,
+          List.append_nil] at hy
+        rcases hy with (hy | hy) | (hy | hy)
+        · exact Or.inr (hvars y (List.mem_append_left _ hy))
+        · exact Or.inl (by simp [atVs, hargs, hy])
+        · exact Or.inr (hvars y (List.mem_append_right _ hy))
+        · exact Or.inl (by simp [atVs, hargs, hy])
+      · simp only [aval, hf, hdp, hargs, show (0 : ℕ) < 100 by norm_num, if_true, bfn,
+          List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ, h2]
+        simp only [argV] at hX ⊢
+        rw [hX, hxor _ _ (hlt _) (hlt _), hnn (ipDen E u), hnn (ipDen E v), hnn (ipDen E Cp)]
+        simp only [Int.toNat_natCast]
+        exact ddot2_xor _ _ _ _
+    · next hnone =>
+      split at h
+      · next u v huv =>
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨hC, hvars⟩ := xorOf_spec V pre hw hn Cp N u v huv μ
+        refine ⟨rfl, rfl, fun y hy => ?_, ?_⟩
+        · simp only [atVsMk, List.mem_append, List.flatMap_cons, List.flatMap_nil,
+            List.append_nil] at hy
+          rcases hy with (hy | hy) | (hy | hy)
+          · exact Or.inl (by simp [atVs, hargs, hy])
+          · exact Or.inr (hvars y (List.mem_append_left _ hy))
+          · exact Or.inl (by simp [atVs, hargs, hy])
+          · exact Or.inr (hvars y (List.mem_append_right _ hy))
+        · simp only [aval, hf, hdp, hargs, show (0 : ℕ) < 100 by norm_num, if_true, bfn,
+            List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ, h2]
+          simp only [argV] at hC ⊢
+          rw [hC, hxor _ _ (hlt _) (hlt _), hnn (ipDen E u), hnn (ipDen E v), hnn (ipDen E X)]
+          simp only [Int.toNat_natCast]
+          have := ddot2_xor (pos 2 (N.den V.ρ.dv)) ((ipDen E u % ((N.den V.ρ.dv : ℕ) : ℤ)).toNat)
+            ((ipDen E v % ((N.den V.ρ.dv : ℕ) : ℤ)).toNat)
+            ((ipDen E X % ((N.den V.ρ.dv : ℕ) : ℤ)).toNat)
+          simpa only [mul_comm] using this
+      · simp at h
+  · simp at h
+
+/-- The digit product at the split `sp` of an exclusive or, read only by roots of unity of order
+`2`, as the sum of two digit products. -/
+def dotXorAt (PW : List (DMon × DMon)) (t : ATm) (sp : List Atom × Atom × List Atom) :
+    Option ATm :=
+  match dotXor PW sp.1 sp.2.1 (maxV t + 1) with
+  | some (b1, b2) =>
+    if wfA t.ats && (ids t.ats).Nodup && !(argVs t.ats).contains sp.2.1.id &&
+        t.dels.all (fun g => !facHas sp.2.1.id g) &&
+        t.phs.all (fun g => !facHas sp.2.1.id g || g.1 == ⟨2, []⟩) &&
+        (fvs t).contains sp.2.1.id then
+      some ⟨t.c, t.sums, sp.1 ++ b1 :: b2 :: sp.2.1 :: sp.2.2,
+        t.dels.map (facSub sp.2.1.id (ipAdd (ipV (maxV t + 1)) (ipV (maxV t + 2)))),
+        t.phs.map (facSub sp.2.1.id (ipAdd (ipV (maxV t + 1)) (ipV (maxV t + 2))))⟩
+    else none
+  | none => none
+
+theorem dotXorAt_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t t' : ATm)
+    (sp : List Atom × Atom × List Atom) (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2)
+    (h : dotXorAt PW t sp = some t') : PWEq V t t' := by
+  unfold dotXorAt at h
+  split at h
+  · next b1 b2 hb =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_eq_mem, decide_eq_false_iff_not,
+      List.all_eq_true, Bool.or_eq_true, beq_iff_eq, decide_eq_true_eq] at hc
+    obtain ⟨⟨⟨⟨⟨hw, hnd⟩, hna⟩, hds⟩, hps⟩, -⟩ := hc
+    set B := maxV t + 1
+    have hlt : ∀ v ∈ allV t, v < B := fun v hv => Nat.lt_succ_of_le (le_foldr_max _ v hv)
+    have hall : ∀ v, v ∈ fvs t ∨ v ∈ argVs t.ats ∨ v ∈ ids t.ats → v < B := fun v hv =>
+      hlt v (by simp only [allV, rvs, List.mem_append]; tauto)
+    rw [hsp] at hw hnd
+    have hwp : wfA sp.1 = true := wfA_append _ _ hw
+    have hnp : (ids sp.1).Nodup := (List.nodup_append.1 (by simpa [ids] using hnd)).1
+    have hid : ∀ v ∈ ids (sp.1 ++ sp.2.1 :: sp.2.2), v < B := fun v hv =>
+      hall v (Or.inr (Or.inr (by rw [hsp]; exact hv)))
+    have harg : ∀ v ∈ argVs (sp.1 ++ sp.2.1 :: sp.2.2), v < B := fun v hv =>
+      hall v (Or.inr (Or.inl (by rw [hsp]; exact hv)))
+    have haid : sp.2.1.id < B := hid _ (by simp [ids])
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    obtain ⟨hb1, hb2, hrd, hdv⟩ := dotXor_ok V hPW sp.1 hwp hnp sp.2.1 b1 b2 B hb μ
+    unfold abody
+    simp only
+    rw [hsp, aext_append, aext_append]
+    simp only [aext]
+    set E0 := aext V sp.1 μ
+    have hrdB : ∀ y ∈ atVs b1 ++ atVs b2, y < B := fun y hy => by
+      rcases hrd y hy with h1 | h1
+      · exact harg y (by simp only [argVs, List.flatMap_append, List.flatMap_cons, List.mem_append]; tauto)
+      · exact harg y (by simp only [argVs, List.flatMap_append, List.mem_append] at h1 ⊢; tauto)
+    have haB : ∀ y ∈ atVs sp.2.1, y < B := fun y hy =>
+      harg y (by simp only [argVs, List.flatMap_append, List.flatMap_cons, List.mem_append]; tauto)
+    have e1 : aval V (Function.update E0 b1.id (aval V E0 b1)) b2 = aval V E0 b2 :=
+      aval_reads V b2 _ _ fun y hy => Function.update_of_ne (by
+        have := hrdB y (List.mem_append_right _ hy); omega) _ _
+    rw [e1]
+    set E2 := Function.update (Function.update E0 b1.id (aval V E0 b1)) b2.id (aval V E0 b2)
+    have e2 : aval V E2 sp.2.1 = aval V E0 sp.2.1 :=
+      aval_reads V _ _ _ fun y hy => by
+        have := haB y hy
+        simp only [E2]; rw [Function.update_of_ne (by omega), Function.update_of_ne (by omega)]
+    rw [e2]
+    set F' := aext V sp.2.2 (Function.update E2 sp.2.1.id (aval V E0 sp.2.1))
+    set F := aext V sp.2.2 (Function.update E0 sp.2.1.id (aval V E0 sp.2.1))
+    have hFF : ∀ v ∈ allV t, F' v = F v := by
+      refine aext_agree V sp.2.2 (allV t) (fun v hv => ?_) _ _ (fun v hv => ?_)
+      · rcases List.mem_append.1 hv with hv | hv
+        · simp only [allV, rvs, List.mem_append]; left; left; right
+          rw [hsp]; simp only [argVs, List.flatMap_append, List.flatMap_cons, List.mem_append]; tauto
+        · simp only [allV, rvs, List.mem_append]; left; right
+          rw [hsp]; simp only [ids, List.map_append, List.map_cons, List.mem_append, List.mem_cons]; tauto
+      · have := hlt v hv
+        by_cases e : v = sp.2.1.id
+        · subst e; simp
+        · simp only [E2]
+          rw [Function.update_of_ne e, Function.update_of_ne e, Function.update_of_ne (by omega),
+            Function.update_of_ne (by omega)]
+    have hpost : ∀ v ∈ ids sp.2.2, v < B := fun v hv => hid v (by
+      simp only [ids, List.map_append, List.map_cons, List.mem_append, List.mem_cons] at hv ⊢; tauto)
+    have hFB : F' B = aval V E0 b1 := by
+      have h1 : F' B = E2 B := by
+        simp only [F']
+        rw [aext_off V _ _ _ (fun h' => by have := hpost B h'; omega), Function.update_of_ne (by omega)]
+      rw [h1]
+      simp only [E2]
+      rw [Function.update_of_ne (by rw [hb2]; omega), hb1, Function.update_self]
+    have hFB1 : F' (B + 1) = aval V E0 b2 := by
+      have h1 : F' (B + 1) = E2 (B + 1) := by
+        simp only [F']
+        rw [aext_off V _ _ _ (fun h' => by have := hpost (B + 1) h'; omega),
+          Function.update_of_ne (by omega)]
+      rw [h1]
+      simp only [E2]
+      rw [hb2, Function.update_self]
+    have hFa : F' sp.2.1.id = aval V E0 sp.2.1 := by
+      simp only [F']
+      rw [aext_off V _ _ _ (fun h' => by
+        have := (List.nodup_append.1 (by simpa [ids] using hnd)).2.1
+        simp only [ids, List.map_cons, List.nodup_cons] at this
+        exact this.1 h'), Function.update_self]
+    rw [bodyOf_sub, ipDen_add, ipDen_V, ipDen_V, hFB, show maxV t + 2 = B + 1 by rfl, hFB1]
+    have hfv : ∀ g ∈ t.dels ++ t.phs, ∀ y ∈ facVars g, y < B := fun g hg y hy =>
+      hall y (Or.inl (List.mem_flatMap.2 ⟨g, hg, hy⟩))
+    have hgF : ∀ g ∈ t.dels ++ t.phs, ipDen F' g.2 = ipDen F g.2 := fun g hg =>
+      ipDen_reads _ _ _ fun y hy => hFF y (by
+        simp only [allV, rvs, fvs, List.mem_append]; left; left; left
+        exact List.mem_flatMap.2 ⟨g, hg, hy⟩)
+    have hs2 : (2 : ℤ) ∣ (aval V E0 b1 + aval V E0 b2) - F' sp.2.1.id := by
+      rw [hFa, ← neg_sub]; exact dvd_neg.2 hdv
+    unfold bodyOf
+    congr 1
+    · congr 1; refine List.map_congr_left fun g hg => ?_
+      have hn : ipHas sp.2.1.id g.2 = false := by simpa [facHas] using hds g hg
+      unfold delV; rw [ipDen_upd_of _ _ _ _ hn, hgF g (List.mem_append_left _ hg)]
+    · congr 1; refine List.map_congr_left fun g hg => ?_
+      unfold phV
+      rcases hps g hg with hn | h2g
+      · have hn' : ipHas sp.2.1.id g.2 = false := by simpa [facHas] using hn
+        rw [ipDen_upd_of _ _ _ _ hn', hgF g (List.mem_append_right _ hg)]
+      · rw [← hgF g (List.mem_append_right _ hg), h2g]
+        have hd2 : DMon.den V.ρ.dv ⟨2, []⟩ = 2 := by simp [DMon.den, npow]
+        rw [hd2]
+        apply om_zpow_congr 2 (by norm_num)
+        have := hs2.trans (ipDen_upd_dvd F' sp.2.1.id _ (F' sp.2.1.id) g.2)
+        rw [Function.update_eq_self] at this
+        exact_mod_cast this
+  · simp at h
+
+/-! ## Remainders modulo a dimension less one -/
+
+/-- Whether `z` is a remainder modulo `N - 1` of the table `l`. -/
+def isM1 (l : List Atom) (z : ℕ) (N : DMon) : Bool :=
+  (findAt l z).any fun b => b.f == 13 && b.dp == [N] && b.args.length == 1
+
+/-- Whether `w` is the value of `N` in the table `l`. -/
+def isDim (l : List Atom) (w : ℕ) (N : DMon) : Bool :=
+  (findAt l w).any fun b => b.f == 8 && b.dp == [N] && b.args.isEmpty
+
+theorem m1_val (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre).Nodup)
+    (z : ℕ) (N : DMon) (h : isM1 pre z N = true) (μ : ℕ → ℤ) :
+    ∃ X : ℤ, aext V pre μ z = X % ((N.den V.ρ.dv : ℤ) - 1) := by
+  unfold isM1 at h
+  cases hb : findAt pre z with
+  | none => simp [hb] at h
+  | some b =>
+    rw [hb] at h
+    simp only [Option.any_some, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨⟨hf, hdp⟩, -⟩ := h
+    obtain ⟨hbm, hid⟩ := findAt_spec pre z b hb
+    rw [← hid, aext_fix V pre hw hn μ b hbm]
+    refine ⟨((b.args.map (argV V.ρ.dv (aext V pre μ))).getD 0 0), ?_⟩
+    simp [aval, hf, hdp, bfn]
+
+theorem dim_val (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre).Nodup)
+    (w : ℕ) (N : DMon) (h : isDim pre w N = true) (μ : ℕ → ℤ) :
+    aext V pre μ w = (N.den V.ρ.dv : ℤ) := by
+  unfold isDim at h
+  cases hb : findAt pre w with
+  | none => simp [hb] at h
+  | some b =>
+    rw [hb] at h
+    simp only [Option.any_some, Bool.and_eq_true, beq_iff_eq, List.isEmpty_iff] at h
+    obtain ⟨⟨hf, hdp⟩, ha⟩ := h
+    obtain ⟨hbm, hid⟩ := findAt_spec pre w b hb
+    rw [← hid, aext_fix V pre hw hn μ b hbm]
+    simp [aval, hf, hdp, ha, bfn]
+
+/-- Whether `u` is `mod(-1, N)` in the table `l`. -/
+def isNeg1 (l : List Atom) (u : ℕ) (N : DMon) : Bool :=
+  (findAt l u).any fun b => b.f == 2 && b.args == [(ipC (-1), N)]
+
+theorem neg1_val (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre).Nodup)
+    (u : ℕ) (N : DMon) (h : isNeg1 pre u N = true) (μ : ℕ → ℤ) :
+    ((N.den V.ρ.dv : ℤ) - 1) ∣ aext V pre μ u := by
+  unfold isNeg1 at h
+  cases hb : findAt pre u with
+  | none => simp [hb] at h
+  | some b =>
+    rw [hb] at h
+    simp only [Option.any_some, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hf, ha⟩ := h
+    obtain ⟨hbm, hid⟩ := findAt_spec pre u b hb
+    rw [← hid, aext_fix V pre hw hn μ b hbm]
+    simp only [aval, hf, ha, show (2 : ℕ) < 100 by norm_num, if_true, bfn, List.map_cons,
+      List.map_nil, List.getD_cons_zero, argV, ipDen_C]
+    rcases Nat.eq_zero_or_pos (N.den V.ρ.dv) with h0 | h0
+    · rw [h0]; exact ⟨-(-1 % ((0 : ℕ) : ℤ)), by ring⟩
+    · have : (-1 : ℤ) % ((N.den V.ρ.dv : ℕ) : ℤ) = (N.den V.ρ.dv : ℤ) - 1 := by
+        rw [show (-1 : ℤ) = ((N.den V.ρ.dv : ℤ) - 1) + (-1) * (N.den V.ρ.dv : ℤ) by ring,
+          Int.add_mul_emod_self_right]
+        exact Int.emod_eq_of_lt (by omega) (by omega)
+      rw [this]
+
+/-- Inside a remainder modulo `N - 1`, a remainder modulo `N - 1` read as its argument, the
+value of `N` read as `1` and `mod(-1, N)` read as `0`. -/
+def m1Arg (pre : List Atom) (a : Atom) : Option Atom :=
+  match a.f, a.dp, a.args with
+  | 13, [N], [(P, Z)] =>
+    if Z = ZM then
+      match (ipVs P).find? (fun z => isM1 pre z N) with
+      | some z =>
+        match findAt pre z with
+        | some b =>
+          match b.args with
+          | [(q, Zb)] => if Zb = ZM then some { a with args := [(ipSubst z q P, ZM)] } else none
+          | _ => none
+        | none => none
+      | none =>
+        match (ipVs P).find? (fun w => isDim pre w N) with
+        | some w => some { a with args := [(ipSubst w (ipC 1) P, ZM)] }
+        | none =>
+          match (ipVs P).find? (fun u => isNeg1 pre u N) with
+          | some u => some { a with args := [(ipSubst u (ipC 0) P, ZM)] }
+          | none => none
+    else none
+  | _, _, _ => none
+
+theorem emod_congr_sub (m a b c : ℤ) (h : m ∣ a - b) (hc : m ∣ c - b) : a % m = c % m :=
+  ((Int.modEq_iff_dvd.2 h).symm.trans (Int.modEq_iff_dvd.2 hc))
+
+theorem m1Arg_ok (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre).Nodup)
+    (a a' : Atom) (h : m1Arg pre a = some a') (μ : ℕ → ℤ) :
+    aval V (aext V pre μ) a' = aval V (aext V pre μ) a := by
+  set E := aext V pre μ
+  unfold m1Arg at h
+  split at h
+  · next N P Z hf hdp hargs =>
+    split_ifs at h with hZ
+    subst hZ
+    split at h
+    · next z hz =>
+      have hzm := List.find?_some hz
+      split at h
+      · next b hb =>
+        split at h
+        · next q Zb hbargs =>
+          split_ifs at h with hZb
+          subst hZb
+          simp only [Option.some.injEq] at h
+          subst h
+          obtain ⟨hbm, hid⟩ := findAt_spec pre z b hb
+          have hEz : E z = ipDen E q % ((N.den V.ρ.dv : ℤ) - 1) := by
+            rw [← hid]
+            show aext V pre μ b.id = _
+            rw [aext_fix V pre hw hn μ b hbm]
+            have hb13 : b.f = 13 ∧ b.dp = [N] := by
+              unfold isM1 at hzm; rw [hb] at hzm
+              simp only [Option.any_some, Bool.and_eq_true, beq_iff_eq] at hzm
+              exact hzm.1
+            simp [aval, hb13.1, hb13.2, hbargs, bfn, argV_zm]
+            rfl
+          simp only [aval, hf, hdp, hargs, show (13 : ℕ) < 100 by norm_num, if_true, bfn,
+            List.map_cons, List.map_nil, List.getD_cons_zero, argV_zm]
+          rw [ipDen_subst]
+          refine emod_congr_sub _ _ (ipDen (Function.update E z (E z)) P) _ ?_ ?_
+          · have := ipDen_upd_dvd E z (ipDen E q) (E z) P
+            refine (dvd_trans ?_ this)
+            rw [hEz, Int.emod_def]; exact ⟨ipDen E q / ((N.den V.ρ.dv : ℤ) - 1), by ring⟩
+          · rw [Function.update_eq_self]; simp
+        · simp at h
+      · simp at h
+    · next hz =>
+      split at h
+      · next w hwf =>
+        have hwm := List.find?_some hwf
+        simp only [Option.some.injEq] at h
+        subst h
+        have hEw : E w = (N.den V.ρ.dv : ℤ) := dim_val V pre hw hn w N hwm μ
+        simp only [aval, hf, hdp, hargs, show (13 : ℕ) < 100 by norm_num, if_true, bfn,
+          List.map_cons, List.map_nil, List.getD_cons_zero, argV_zm]
+        rw [ipDen_subst, ipDen_C]
+        refine emod_congr_sub _ _ (ipDen (Function.update E w (E w)) P) _ ?_ ?_
+        · have := ipDen_upd_dvd E w 1 (E w) P
+          refine dvd_trans ?_ this
+          rw [hEw]; exact ⟨-1, by ring⟩
+        · rw [Function.update_eq_self]; simp
+      · split at h
+        · next u huf =>
+          have hum := List.find?_some huf
+          simp only [Option.some.injEq] at h
+          subst h
+          have hEu := neg1_val V pre hw hn u N hum μ
+          simp only [aval, hf, hdp, hargs, show (13 : ℕ) < 100 by norm_num, if_true, bfn,
+            List.map_cons, List.map_nil, List.getD_cons_zero, argV_zm]
+          rw [ipDen_subst, ipDen_C]
+          refine emod_congr_sub _ _ (ipDen (Function.update E u (E u)) P) _ ?_ ?_
+          · have := ipDen_upd_dvd E u 0 (E u) P
+            refine dvd_trans ?_ this
+            simpa using hEu
+          · rw [Function.update_eq_self]; simp
+        · simp at h
+  · simp at h
+
+/-- The argument of the remainder modulo `N - 1` at the split `sp` simplified. -/
+def m1At (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match m1Arg sp.1 sp.2.1 with
+  | some a' =>
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+    else none
+  | none => none
+
+theorem m1At_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (h : m1At t sp = some t') : PWEq V t t' := by
+  unfold m1At at h
+  split at h
+  · next a' ha =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    rw [hsp] at hc
+    have hw : wfA sp.1 = true := wfA_append _ _ hc.1
+    have hn : (ids sp.1).Nodup := (List.nodup_append.1 (by simpa [ids] using hc.2)).1
+    have hid : a'.id = sp.2.1.id := by
+      unfold m1Arg at ha
+      repeat' (first | split at ha | split_ifs at ha)
+      all_goals first | (simp only [Option.some.injEq] at ha; rw [← ha]) | simp at ha
+    exact swap_pw V t sp hsp a' hid fun μ => m1Arg_ok V sp.1 hw hn _ _ ha μ
+  · simp at h
+
+/-- A reduced argument `mod(z, N)` of a remainder `z` modulo `N - 1`, `2 ≤ N`, read as `z`. -/
+def aliasAt (fl : List ℕ) (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match sp.2.1.f, sp.2.1.args with
+  | 2, [([([z], 1)], N)] =>
+    if isM1 sp.1 z N && decide (2 ≤ N.den (flv fl)) && wfA t.ats && (ids t.ats).Nodup then
+      some ⟨t.c, t.sums, sp.1 ++ sp.2.2.map (atSub sp.2.1.id (ipV z)),
+        t.dels.map (facSub sp.2.1.id (ipV z)), t.phs.map (facSub sp.2.1.id (ipV z))⟩
+    else none
+  | _, _ => none
+
+theorem aliasAt_ok (V : LV) (fl : List ℕ) (hfl : FloorOK fl V.ρ) (t t' : ATm)
+    (sp : List Atom × Atom × List Atom) (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2)
+    (h : aliasAt fl t sp = some t') : PWEq V t t' := by
+  unfold aliasAt at h
+  split at h
+  · next z N hf hargs =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨⟨⟨hm, h2⟩, hw0⟩, hn0⟩ := hc
+    have hN2 : 2 ≤ N.den V.ρ.dv := h2.trans (DMon.den_mono _ _ hfl N)
+    rw [hsp] at hw0 hn0
+    have hw : wfA sp.1 = true := wfA_append _ _ hw0
+    have hnd := List.nodup_append.1 (by simpa [ids] using hn0)
+    have hn : (ids sp.1).Nodup := hnd.1
+    have hzpre : z ∈ ids sp.1 := by
+      unfold isM1 at hm
+      cases hb : findAt sp.1 z with
+      | none => simp [hb] at hm
+      | some b =>
+        obtain ⟨hbm, hid⟩ := findAt_spec sp.1 z b hb
+        rw [← hid]; exact List.mem_map_of_mem hbm
+    have hzpost : z ∉ ids (sp.2.1 :: sp.2.2) := fun h' => hnd.2.2 z hzpre z h' rfl
+    simp only [ids, List.map_cons, List.mem_cons, not_or] at hzpost
+    have hapost : sp.2.1.id ∉ ids sp.2.2 := by
+      have := hnd.2.1; simp only [ids, List.map_cons, List.nodup_cons] at this; exact this.1
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody
+    simp only
+    rw [hsp, aext_append, aext_append]
+    simp only [aext]
+    obtain ⟨X, hX⟩ := m1_val V sp.1 hw hn z N hm μ
+    set P := aext V sp.1 μ
+    have hval : aval V P sp.2.1 = ipDen P (ipV z) := by
+      have hpos : (0 : ℤ) < (N.den V.ρ.dv : ℤ) - 1 := by omega
+      simp only [aval, hf, hargs, show (2 : ℕ) < 100 by norm_num, if_true, bfn, List.map_cons,
+        List.map_nil, argV, List.getD_cons_zero, ipDen_V]
+      have hV : ipDen P [([z], 1)] = P z := by simp [ipDen, imDen]
+      rw [hV, hX]
+      have h0 := Int.emod_nonneg X hpos.ne'
+      have h1 := Int.emod_lt_of_pos X hpos
+      exact Int.emod_eq_of_lt h0 (by omega)
+    have hpv : plainP sp.2.2 (ipV z) = true := by
+      simp only [plainP, ipVs, ipV, List.flatMap_cons, List.flatMap_nil, List.append_nil,
+        List.all_cons, List.all_nil, Bool.and_true, Bool.not_eq_true', List.contains_eq_mem,
+        decide_eq_false_iff_not]
+      exact hzpost.2
+    have hhs : ipHas sp.2.1.id (ipV z) = false := by simp [ipHas, ipV, Ne.symm hzpost.1]
+    rw [hval, aext_sub V sp.2.2 sp.2.1.id hapost _ hpv hhs P, bodyOf_sub, ipDen_V, ipDen_V,
+      aext_off V _ _ _ (by simpa [ids, atSub, List.map_map, Function.comp_def] using hzpost.2)]
+  · simp at h
+
+/-- A delta `[N ∣ z - N + 1]` of a remainder `z` modulo `N - 1`, `2 ≤ N`, read as `[N ∣ 1]`. -/
+def falseDel (fl : List ℕ) (ats : List Atom) (f : Fac) : Option Fac :=
+  match f.2 with
+  | [([], c), ([z], cz), ([w], cw)] =>
+    if (c = 1 ∧ cz = 1 ∧ cw = -1 ∨ c = -1 ∧ cz = -1 ∧ cw = 1) ∧ isM1 ats z f.1 = true ∧
+        isDim ats w f.1 = true ∧ 2 ≤ f.1.den (flv fl) then some (f.1, ipC 1) else none
+  | [([], c), ([z], cz)] =>
+    if (c = 1 ∧ cz = 1 ∨ c = -1 ∧ cz = -1) ∧ isM1 ats z f.1 = true ∧ 2 ≤ f.1.den (flv fl) then
+      some (f.1, ipC 1) else none
+  | _ => none
+
+theorem falseDel_ok (V : LV) (fl : List ℕ) (hfl : FloorOK fl V.ρ) (ats : List Atom)
+    (hw : wfA ats = true) (hn : (ids ats).Nodup) (f f' : Fac) (h : falseDel fl ats f = some f')
+    (μ : ℕ → ℤ) : delV V.ρ.dv (aext V ats μ) f' = delV V.ρ.dv (aext V ats μ) f := by
+  unfold falseDel at h
+  split at h
+  · next c z cz w cw hp =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨hs, hm, hd, h2⟩ := hc
+    have hN2 : 2 ≤ f.1.den V.ρ.dv := h2.trans (DMon.den_mono _ _ hfl f.1)
+    obtain ⟨X, hX⟩ := m1_val V ats hw hn z f.1 hm μ
+    have hW := dim_val V ats hw hn w f.1 hd μ
+    have hpos : (0 : ℤ) < (f.1.den V.ρ.dv : ℤ) - 1 := by omega
+    have h0 := Int.emod_nonneg X hpos.ne'
+    have h1 := Int.emod_lt_of_pos X hpos
+    have hl : delV V.ρ.dv (aext V ats μ) (f.1, ipC 1) = 0 := by
+      unfold delV
+      simp only [ipDen_C]
+      rw [if_neg]
+      intro hd1; have := Int.le_of_dvd one_pos hd1; omega
+    have hr : delV V.ρ.dv (aext V ats μ) f = 0 := by
+      unfold delV
+      rw [hp, if_neg]
+      simp only [ipDen, imDen, List.map_cons, List.map_nil, List.prod_cons, List.prod_nil,
+        List.sum_cons, List.sum_nil, mul_one, add_zero, hX, hW]
+      intro hd2
+      rcases hs with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, rfl⟩
+      · have := Int.eq_zero_of_dvd_of_natAbs_lt_natAbs hd2 (by omega)
+        omega
+      · have := Int.eq_zero_of_dvd_of_natAbs_lt_natAbs hd2 (by omega)
+        omega
+    rw [hl, hr]
+  · next c z cz hp =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨hs, hm, h2⟩ := hc
+    have hN2 : 2 ≤ f.1.den V.ρ.dv := h2.trans (DMon.den_mono _ _ hfl f.1)
+    obtain ⟨X, hX⟩ := m1_val V ats hw hn z f.1 hm μ
+    have hpos : (0 : ℤ) < (f.1.den V.ρ.dv : ℤ) - 1 := by omega
+    have h0 := Int.emod_nonneg X hpos.ne'
+    have h1 := Int.emod_lt_of_pos X hpos
+    have hl : delV V.ρ.dv (aext V ats μ) (f.1, ipC 1) = 0 := by
+      unfold delV
+      simp only [ipDen_C]
+      rw [if_neg]
+      intro hd1; have := Int.le_of_dvd one_pos hd1; omega
+    have hr : delV V.ρ.dv (aext V ats μ) f = 0 := by
+      unfold delV
+      rw [hp, if_neg]
+      simp only [ipDen, imDen, List.map_cons, List.map_nil, List.prod_cons, List.prod_nil,
+        List.sum_cons, List.sum_nil, mul_one, add_zero, hX]
+      intro hd2
+      rcases hs with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+      · have := Int.eq_zero_of_dvd_of_natAbs_lt_natAbs hd2 (by omega)
+        omega
+      · have := Int.eq_zero_of_dvd_of_natAbs_lt_natAbs hd2 (by omega)
+        omega
+    rw [hl, hr]
+  · simp at h
+
+/-- A delta of a remainder modulo `N - 1` that never holds read as `[N ∣ 1]`. -/
+def falseAt (fl : List ℕ) (t : ATm) (sp : List Fac × Fac × List Fac) : Option ATm :=
+  match falseDel fl t.ats sp.2.1 with
+  | some f' =>
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, t.ats, sp.1 ++ f' :: sp.2.2, t.phs⟩
+    else none
+  | none => none
+
+theorem falseAt_ok (V : LV) (fl : List ℕ) (hfl : FloorOK fl V.ρ) (t t' : ATm)
+    (sp : List Fac × Fac × List Fac) (hsp : t.dels = sp.1 ++ sp.2.1 :: sp.2.2)
+    (h : falseAt fl t sp = some t') : PWEq V t t' := by
+  unfold falseAt at h
+  split at h
+  · next f' hf =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody bodyOf
+    simp only
+    rw [hsp]
+    simp only [List.map_append, List.map_cons, List.prod_append, List.prod_cons]
+    rw [falseDel_ok V fl hfl t.ats hc.1 hc.2 _ _ hf μ]
+  · simp at h
+
+/-- Whether `u` is a reduced argument `mod(y, N)` of the table `l`. -/
+def isRed (l : List Atom) (u : ℕ) (N : DMon) : Bool :=
+  (findAt l u).any fun c => c.f == 2 && match c.args with
+    | [(_, M)] => M == N
+    | _ => false
+
+theorem red_val (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre).Nodup)
+    (u : ℕ) (N : DMon) (h : isRed pre u N = true) (μ : ℕ → ℤ) :
+    ∃ Y : ℤ, aext V pre μ u = Y % (N.den V.ρ.dv : ℤ) := by
+  unfold isRed at h
+  cases hb : findAt pre u with
+  | none => simp [hb] at h
+  | some b =>
+    rw [hb] at h
+    simp only [Option.any_some, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hf, ha⟩ := h
+    obtain ⟨hbm, hid⟩ := findAt_spec pre u b hb
+    rw [← hid, aext_fix V pre hw hn μ b hbm]
+    split at ha
+    · next q M hargs =>
+      simp only [beq_iff_eq] at ha
+      subst ha
+      exact ⟨ipDen (aext V pre μ) q, by simp [aval, hf, hargs, bfn, argV]⟩
+    · simp at ha
+
+/-- Inside a remainder modulo `N - 1`, `u = mod(y, N)` under the delta `[N ∣ 1 + u]` of `ds`
+read as `0`. -/
+def redArg (ds : List Fac) (pre : List Atom) (a : Atom) : Option (ℕ × Atom) :=
+  match a.f, a.dp, a.args with
+  | 13, [N], [(P, Z)] =>
+    if Z = ZM then
+      match (ipVs P).find? (fun u => isRed pre u N && ds.contains (N, [([], 1), ([u], 1)])) with
+      | some u => some (u, { a with args := [(ipSubst u (ipC 0) P, ZM)] })
+      | none => none
+    else none
+  | _, _, _ => none
+
+theorem redArg_spec (ds : List Fac) (pre : List Atom) (a : Atom) (u : ℕ) (a' : Atom)
+    (h : redArg ds pre a = some (u, a')) :
+    a'.id = a.id ∧ isRed pre u (a.dp.getD 0 ZM) = true ∧
+      (a.dp.getD 0 ZM, [([], 1), ([u], 1)]) ∈ ds ∧
+      ∀ (V : LV) (E : ℕ → ℤ), ((a.dp.getD 0 ZM).den V.ρ.dv : ℤ) - 1 ∣ E u →
+        aval V E a' = aval V E a := by
+  unfold redArg at h
+  split at h
+  · next N P Z hf hdp hargs =>
+    split_ifs at h with hZ
+    subst hZ
+    split at h
+    · next u0 hu =>
+      have hum := List.find?_some hu
+      simp only [Bool.and_eq_true, List.contains_iff_mem] at hum
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      simp only [hdp, List.getD_cons_zero]
+      refine ⟨trivial, hum.1, hum.2, fun V E hE => ?_⟩
+      simp only [aval, hf, hdp, hargs, show (13 : ℕ) < 100 by norm_num, if_true, bfn,
+        List.map_cons, List.map_nil, List.getD_cons_zero, argV_zm]
+      rw [ipDen_subst, ipDen_C]
+      refine emod_congr_sub _ _ (ipDen (Function.update E u0 (E u0)) P) _ ?_ ?_
+      · have := ipDen_upd_dvd E u0 0 (E u0) P
+        refine dvd_trans ?_ this
+        simpa using hE
+      · rw [Function.update_eq_self]; simp
+    · simp at h
+  · simp at h
+
+/-- The remainder modulo `N - 1` at the split `sp` simplified under a delta of the term. -/
+def redAt (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
+  match redArg t.dels sp.1 sp.2.1 with
+  | some (_, a') =>
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+    else none
+  | none => none
+
+theorem redAt_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (h : redAt t sp = some t') : PWEq V t t' := by
+  unfold redAt at h
+  split at h
+  · next u a' ha =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨hid, hred, hdel, hv⟩ := redArg_spec _ _ _ _ _ ha
+    rw [hsp] at hc
+    have hw : wfA sp.1 = true := wfA_append _ _ hc.1
+    have hnd : (ids (sp.1 ++ sp.2.1 :: sp.2.2)).Nodup := hc.2
+    have hn : (ids sp.1).Nodup := (List.nodup_append.1 (by simpa [ids] using hnd)).1
+    set N := sp.2.1.dp.getD 0 ZM
+    have hu_in : u ∈ ids sp.1 := by
+      unfold isRed at hred
+      cases hb : findAt sp.1 u with
+      | none => simp [hb] at hred
+      | some b =>
+        obtain ⟨hbm, hbid⟩ := findAt_spec sp.1 u b hb
+        exact hbid ▸ List.mem_map_of_mem hbm
+    have hu_out : u ∉ ids (sp.2.1 :: sp.2.2) := by
+      intro hm
+      have := List.disjoint_of_nodup_append (by simpa [ids] using hnd)
+      exact this hu_in (by simpa [ids] using hm)
+    have hu_out' : u ∉ ids (a' :: sp.2.2) := by simpa [ids, hid] using hu_out
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody
+    simp only
+    rw [hsp, aext_append, aext_append]
+    set E0 := aext V sp.1 μ
+    have hF : aext V (sp.2.1 :: sp.2.2) E0 u = E0 u := aext_off V _ E0 u hu_out
+    have hF' : aext V (a' :: sp.2.2) E0 u = E0 u := aext_off V _ E0 u hu_out'
+    by_cases hd : ((N.den V.ρ.dv : ℕ) : ℤ) ∣ 1 + E0 u
+    · have hE : (N.den V.ρ.dv : ℤ) - 1 ∣ E0 u := by
+        obtain ⟨Y, hY⟩ := red_val V sp.1 hw hn u N hred μ
+        rcases Nat.eq_zero_or_pos (N.den V.ρ.dv) with h0 | h0
+        · rw [h0]; exact ⟨-E0 u, by ring⟩
+        · have hY0 := Int.emod_nonneg Y (by omega : ((N.den V.ρ.dv : ℕ) : ℤ) ≠ 0)
+          have hY1 := Int.emod_lt_of_pos Y (by omega : (0 : ℤ) < (N.den V.ρ.dv : ℕ))
+          obtain ⟨k, hk⟩ := hd
+          have : k = 1 := by
+            rcases lt_trichotomy k 1 with hk1 | hk1 | hk1
+            · have : k ≤ 0 := by omega
+              nlinarith
+            · exact hk1
+            · have : 2 ≤ k := by omega
+              nlinarith
+          subst this
+          rw [show E0 u = (N.den V.ρ.dv : ℤ) - 1 by omega]
+      simp only [aext]
+      rw [hid, hv V E0 hE]
+    · have hz : ∀ F : ℕ → ℤ, F u = E0 u → (t.dels.map (delV V.ρ.dv F)).prod = 0 := by
+        intro F hFu
+        apply List.prod_eq_zero
+        refine List.mem_map.2 ⟨_, hdel, ?_⟩
+        unfold delV
+        rw [if_neg]
+        simpa [ipDen, imDen, hFu] using hd
+      unfold bodyOf
+      rw [hz _ hF, hz _ hF', zero_mul, zero_mul]
+  · simp at h
+
+/-- One rule for constants, exclusive or and shared atoms, the first that applies. -/
+def pRule1 (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
+  match firstSome (cstAt t) (splits t.ats) with
+  | some t' => some t'
+  | none =>
+    match firstSome (swapAt xorZ t) (splits t.ats) with
+    | some t' => some t'
+    | none =>
+      match firstSome (swapAt modC t) (splits t.ats) with
+      | some t' => some t'
+      | none =>
+      match firstSome (swapAt ddotSwap t) (splits t.ats) with
+      | some t' => some t'
+      | none =>
+        match firstSome (xorAt PW t) (splits t.ats) with
+        | some t' => some t'
+        | none =>
+          match firstSome (dedupA t) (splits t.ats) with
+          | some t' => some t'
+          | none =>
+            match firstSome (dedupW t) (splits t.ats) with
+            | some t' => some t'
+            | none =>
+              match firstSome (dsubAt t) (splits t.ats) with
+              | some t' => some t'
+              | none =>
+                match firstSome (dotXorAt PW t) (splits t.ats) with
+                | some t' => some t'
+                | none =>
+                  match firstSome (m1At t) (splits t.ats) with
+                  | some t' => some t'
+                  | none =>
+                    match firstSome (aliasAt fl t) (splits t.ats) with
+                    | some t' => some t'
+                    | none =>
+                      match firstSome (redAt t) (splits t.ats) with
+                      | some t' => some t'
+                      | none => firstSome (falseAt fl t) (splits t.dels)
+
+theorem swapAt_ok (V : LV) (g : Atom → Option Atom) (hg : ∀ a a', g a = some a' →
+    a'.id = a.id ∧ ∀ μ, aval V μ a' = aval V μ a) (t t' : ATm) (sp : List Atom × Atom × List Atom)
+    (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (h : swapAt g t sp = some t') : PWEq V t t' := by
+  unfold swapAt at h
+  split at h
+  · next a' ha =>
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨hid, hv⟩ := hg _ _ ha
+    exact swap_pw V t sp hsp a' hid fun μ => hv _
+  · simp at h
+
+theorem pRule1_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
+    (t t' : ATm) (h : pRule1 fl PW t = some t') : PWEq V t t' := by
+  unfold pRule1 at h
+  split at h
+  · next t'' h' =>
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+    exact cstAt_ok V t _ p (splits_spec _ p hp) he
+  · split at h
+    · next t'' h' =>
+      simp only [Option.some.injEq] at h; subst h
+      obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+      refine swapAt_ok V xorZ (fun a a' ha => ⟨?_, xorZ_ok V hρ a a' ha⟩) t _ p (splits_spec _ p hp) he
+      unfold xorZ at ha; split at ha
+      · split_ifs at ha <;> simp only [Option.some.injEq] at ha <;> rw [← ha]
+      · simp at ha
+    · split at h
+      · next t'' h' =>
+        simp only [Option.some.injEq] at h; subst h
+        obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+        refine swapAt_ok V modC (fun a a' ha => ⟨?_, modC_ok V a a' ha⟩) t _ p (splits_spec _ p hp) he
+        unfold modC at ha; split at ha
+        · split_ifs at ha; simp only [Option.some.injEq] at ha; rw [← ha]
+        · simp at ha
+      · split at h
+        · next t'' h' =>
+          simp only [Option.some.injEq] at h; subst h
+          obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+          refine swapAt_ok V ddotSwap (fun a a' ha => ⟨?_, ddotSwap_ok V a a' ha⟩) t _ p
+            (splits_spec _ p hp) he
+          unfold ddotSwap at ha; split at ha
+          · split_ifs at ha; simp only [Option.some.injEq] at ha; rw [← ha]
+          · simp at ha
+        · split at h
+          · next t'' h' =>
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+            exact xorAt_ok V PW hPW t _ p (splits_spec _ p hp) he
+          · split at h
+            · next t'' h' =>
+              simp only [Option.some.injEq] at h; subst h
+              obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+              exact dedupA_ok V t _ p (splits_spec _ p hp) he
+            · split at h
+              · next t'' h' =>
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                exact dedupW_ok V t _ p (splits_spec _ p hp) he
+              · split at h
+                · next t'' h' =>
+                  simp only [Option.some.injEq] at h; subst h
+                  obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                  exact dsubAt_ok V hρ t _ p (splits_spec _ p hp) he
+                · split at h
+                  · next t'' h' =>
+                    simp only [Option.some.injEq] at h; subst h
+                    obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                    exact dotXorAt_ok V PW hPW t _ p (splits_spec _ p hp) he
+                  · split at h
+                    · next t'' h' =>
+                      simp only [Option.some.injEq] at h; subst h
+                      obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                      exact m1At_ok V t _ p (splits_spec _ p hp) he
+                    · split at h
+                      · next t'' h' =>
+                        simp only [Option.some.injEq] at h; subst h
+                        obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                        exact aliasAt_ok V fl hfl t _ p (splits_spec _ p hp) he
+                      · split at h
+                        · next t'' h' =>
+                          simp only [Option.some.injEq] at h; subst h
+                          obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                          exact redAt_ok V t _ p (splits_spec _ p hp) he
+                        · obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h
+                          exact falseAt_ok V fl hfl t _ p (splits_spec _ p hp) he
+
+/-- The rules for constants, exclusive or and shared atoms repeated, at most `n` of them. -/
+def pRules (fl : List ℕ) (PW : List (DMon × DMon)) : ℕ → ATm → ATm
+  | 0, t => t
+  | n + 1, t => match pRule1 fl PW t with
+    | some t' => pRules fl PW n t'
+    | none => t
+
+theorem pRules_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
+    (n : ℕ) (t : ATm) : PWEq V t (pRules fl PW n t) := by
+  induction n generalizing t with
+  | zero => exact ⟨rfl, rfl, fun _ => rfl⟩
+  | succ n ih =>
+    simp only [pRules]
+    split
+    · next t' h => exact (pRule1_ok V hρ fl hfl PW hPW t t' h).trans (ih t')
+    · exact ⟨rfl, rfl, fun _ => rfl⟩
+
 /-- Atom rules around the reduced-argument and digit-condition steps. -/
 @[irreducible] def preA (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) : ATm :=
-  aRules ((dzStep PW (modRules fl PW (t.ats.length + 1) (aRules (t.ats.length + 1) t))).ats.length + 1)
-    (dzStep PW (modRules fl PW (t.ats.length + 1) (aRules (t.ats.length + 1) t)))
+  aRules ((dzStep PW (modRules fl PW (t.ats.length + 1)
+      (pRules fl PW (t.ats.length + 1) (aRules (t.ats.length + 1) t)))).ats.length + 1)
+    (dzStep PW (modRules fl PW (t.ats.length + 1)
+      (pRules fl PW (t.ats.length + 1) (aRules (t.ats.length + 1) t))))
 
 theorem preA_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
     (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t : ATm) : PWEq V t (preA fl PW t) := by
   unfold preA
-  exact (((aRules_ok V _ t).trans (modRules_ok V hρ fl hfl PW hPW _ _)).trans
-    (dzStep_ok V PW hPW _)).trans (aRules_ok V _ _)
+  exact ((((aRules_ok V _ t).trans (pRules_ok V hρ fl hfl PW hPW _ _)).trans
+    (modRules_ok V hρ fl hfl PW hPW _ _)).trans (dzStep_ok V PW hPW _)).trans (aRules_ok V _ _)
 
 /-- Atom rules, digit conditions read as deltas, factor canonicalisation, canonical names and
 sorted sums; `none` when the term vanishes. -/
 def canonCore (fl : List ℕ) (t : ATm) : Option ATm :=
   match canonF fl t.dels t.phs with
   | none => none
-  | some (k, ds, ps) => some (sortSums (canonRen ⟨CMon.mul t.c k, t.sums, t.ats, ds, ps⟩))
+  | some (k, ds, ps) => some (sortSums (sortTab (canonRen ⟨CMon.mul t.c k, t.sums, t.ats, ds, ps⟩)))
 
 /-- Atom rules, digit conditions read as deltas, factor canonicalisation, canonical names and
 sorted sums; `none` when the term vanishes. -/
@@ -1115,7 +2735,7 @@ theorem canonA_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.�
     exact den_zero_of_pw V t3 (fun μ => canonF_none V.ρ hρ fl hfl _ _ hn _) ν
   · next k ds ps hk =>
     intro ν
-    rw [sortSums_ok, canonRen_ok, ← h13.den ν]
+    rw [sortSums_ok, sortTab_ok, canonRen_ok, ← h13.den ν]
     refine den_of_pw V t3 ⟨CMon.mul t3.c k, t3.sums, t3.ats, ds, ps⟩ rfl (fun μ => ?_) ν
     unfold abody
     simp only

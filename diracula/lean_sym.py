@@ -306,7 +306,27 @@ def rt_c(c: int, k: int) -> CMon:
         return of_q(Fraction(c) ** half)
     if _isqrt_exact(c):
         return of_q(Fraction(c) ** half * math.isqrt(c))
-    return (Fraction(c) ** half, Fraction(0), (), (c,), (), ())
+    r, ps = rad_s(c)
+    return (Fraction(c) ** half * r, Fraction(0), (), ps, (), ())
+
+
+def rad_aux(f: int, p: int, c: int) -> tuple[int, tuple[int, ...]]:
+    while True:
+        if f == 0 or c <= 1:
+            return 1, (() if c == 1 else (c,))
+        if c < p * p:
+            return 1, (c,)
+        if c % (p * p) == 0:
+            r, ps = rad_aux(f - 1, p, c // (p * p))
+            return r * p, ps
+        if c % p == 0:
+            r, ps = rad_aux(f - 1, p + 1, c // p)
+            return r, (p, *ps)
+        f, p = f - 1, p + 1
+
+
+def rad_s(c: int) -> tuple[int, tuple[int, ...]]:
+    return rad_aux(c, 2, c)
 
 
 def rt_d(d: DMon, k: int) -> CMon:
@@ -621,7 +641,9 @@ def norm_ph(f: Fac) -> tuple[CMon, Fac | None]:
         c = ip_const(p)
         if c is not None:
             return ex_q(Fraction(c, f[0][0])), None
-        return of_q(1), (f[0], p)
+        if p[0][0] == ():
+            return ex_q(Fraction(p[0][1], f[0][0])), (f[0], p[1:])
+        return ex_q(Fraction(0)), (f[0], p)
     if not f[1]:
         return of_q(1), None
     return of_q(1), f
@@ -640,6 +662,10 @@ def ph_ins(f: Fac, lst: tuple[Fac, ...]) -> tuple[Fac, ...]:
     for i, g in enumerate(out):
         if g[0] == f[0]:
             out[i] = (g[0], ip_add(g[1], f[1]))
+            return tuple(out)
+        if dm_const(g[0]) and dm_const(f[0]) and g[0][0] != 0 and f[0][0] != 0:
+            lc = math.lcm(g[0][0], f[0][0])
+            out[i] = ((lc, ()), ip_add(ip_smul(lc // g[0][0], g[1]), ip_smul(lc // f[0][0], f[1])))
             return tuple(out)
     return tuple(out + [f])
 

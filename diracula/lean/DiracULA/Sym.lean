@@ -640,11 +640,25 @@ def mul (a b : CMon) : CMon :=
 /-- The square root of `c` found by search, `0` when `c` is no square. -/
 def sqrtS (c : ℕ) : ℕ := ((List.range (c + 1)).find? fun r => r * r == c).getD 0
 
+/-- `(s, ps)` with `c = s² Π ps` by trial division from `p` with fuel `f`, `ps` the primes of odd
+exponent in increasing order. -/
+def radAux : ℕ → ℕ → ℕ → ℕ × List ℕ
+  | 0, _, c => (1, if c = 1 then [] else [c])
+  | f + 1, p, c =>
+    if c ≤ 1 then (1, if c = 1 then [] else [c])
+    else if c < p * p then (1, [c])
+    else if c % (p * p) = 0 then ((radAux f p (c / (p * p))).1 * p, (radAux f p (c / (p * p))).2)
+    else if c % p = 0 then ((radAux f (p + 1) (c / p)).1, p :: (radAux f (p + 1) (c / p)).2)
+    else radAux f (p + 1) c
+
+/-- `(s, ps)` with `c = s² Π ps`. -/
+def radS (c : ℕ) : ℕ × List ℕ := radAux c 2 c
+
 /-- `(√c)^k` for a constant `c ≥ 1`. -/
 def rtC (c : ℕ) (k : ℤ) : CMon :=
   if k % 2 = 0 then ofQ ((c : ℚ) ^ (k / 2))
   else if sqrtS c * sqrtS c = c then ofQ ((c : ℚ) ^ (k / 2) * sqrtS c)
-  else ⟨(c : ℚ) ^ (k / 2), 0, [], [c], [], []⟩
+  else ⟨(c : ℚ) ^ (k / 2) * (radS c).1, 0, [], (radS c).2, [], []⟩
 
 /-- `(√D)^k`. -/
 def rtD (D : DMon) (k : ℤ) : CMon :=
@@ -664,10 +678,12 @@ def atomP (j : ℕ) (k : ℤ) : CMon := ⟨1, 0, [], [], ztrim (List.replicate j
 
 end CMon
 
-/-- What the valuation must satisfy: positive dimension symbols, nonzero atoms. -/
+/-- What the valuation must satisfy: positive dimension symbols, nonzero atoms, atom `2 j + 1` the
+conjugate of atom `2 j`. -/
 structure Val.OK (ρ : Val) : Prop where
   dpos : ∀ i, 0 < ρ.dv i
   anz : ∀ j, ρ.atom j ≠ 0
+  aconj : ∀ j, ρ.atom (2 * j + 1) = starRingEnd ℂ (ρ.atom (2 * j))
 
 theorem ex_half : ex (1 / 2) = -1 := by
   simp only [ex]
@@ -767,6 +783,32 @@ theorem rt_npow (dv : ℕ → ℕ) (e : List ℕ) (k : ℕ) (z : ℤ) :
     simp only [npow, rt_mul, rt_pow, List.map_cons, zpw, rtv]
     rw [mul_zpow, ← ih, ← zpow_natCast, ← zpow_mul, mul_comm (x : ℤ) z]
 
+theorem radAux_spec : ∀ (f p c : ℕ), 0 < p →
+    c = (CMon.radAux f p c).1 * (CMon.radAux f p c).1 * (CMon.radAux f p c).2.prod
+  | 0, p, c, _ => by unfold CMon.radAux; split_ifs with h <;> simp [h]
+  | f + 1, p, c, hp => by
+    unfold CMon.radAux
+    split_ifs with h1 h0 h2 h3 h4
+    · simp [h0]
+    · simp
+    · simp
+    · have ih := radAux_spec f p (c / (p * p)) hp
+      simp only [List.prod_cons]
+      have hc : c = c / (p * p) * (p * p) := (Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero h3)).symm
+      conv_lhs => rw [hc, ih]
+      ring
+    · have ih := radAux_spec f (p + 1) (c / p) (by omega)
+      simp only [List.prod_cons]
+      have hc : c = c / p * p := (Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero h4)).symm
+      conv_lhs => rw [hc, ih]
+      ring
+    · exact radAux_spec f (p + 1) c (by omega)
+
+theorem rt_prod (l : List ℕ) : rt l.prod = (l.map rt).prod := by
+  induction l with
+  | nil => simp [rt]
+  | cons a l ih => simp [rt_mul, ih]
+
 theorem rtC_den (ρ : Val) (c : ℕ) (hc : 0 < c) (k : ℤ) : (CMon.rtC c k).den ρ = rt c ^ k := by
   have hne : rt c ≠ 0 := rt_ne c hc
   have hk : rt c ^ k = (c : ℂ) ^ (k / 2) * rt c ^ (k % 2) := by
@@ -784,7 +826,12 @@ theorem rtC_den (ρ : Val) (c : ℕ) (hc : 0 < c) (k : ℤ) : (CMon.rtC c k).den
       rw [this, Real.sqrt_mul_self (by positivity)]; push_cast; rfl
     rw [hk, hk1, zpow_one, hs]; simp [CMon.den, CMon.ofQ, zpw, ex_zero]
   · have hk1 : k % 2 = 1 := by omega
-    rw [hk, hk1, zpow_one]; simp [CMon.den, zpw, ex_zero]
+    have hr : rt c = ((CMon.radS c).1 : ℂ) * ((CMon.radS c).2.map rt).prod := by
+      conv_lhs => rw [radAux_spec c 2 c (by norm_num)]
+      rw [rt_mul, rt_mul, rt_prod, show rt (CMon.radAux c 2 c).1 * rt (CMon.radAux c 2 c).1 =
+        ((CMon.radAux c 2 c).1 : ℂ) from sqrt_mul_sqrt _]
+      rfl
+    rw [hk, hk1, zpow_one, hr]; simp [CMon.den, zpw, ex_zero]; ring
 
 theorem rtD_den (ρ : Val) (D : DMon) (hc : 0 < D.c) (k : ℤ) :
     (CMon.rtD D k).den ρ = rt (D.den ρ.dv) ^ k := by

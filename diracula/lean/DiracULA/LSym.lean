@@ -33,7 +33,17 @@ structure Atom where
   ks : List ℤ
   dp : List DMon
   args : List (IPoly × DMon)
-  deriving DecidableEq, Repr
+  deriving Repr
+
+/-- Equality of atoms, field by field. -/
+def Atom.beq (a b : Atom) : Bool :=
+  decide (a.id = b.id) && decide (a.f = b.f) && decide (a.ks = b.ks) && decide (a.dp = b.dp) &&
+    decide (a.args = b.args)
+
+theorem Atom.beq_iff (a b : Atom) : a.beq b = true ↔ a = b := by
+  cases a; cases b; simp [Atom.beq, and_assoc]
+
+instance : DecidableEq Atom := fun a b => decidable_of_iff _ (Atom.beq_iff a b)
 
 /-- A valuation of dimension symbols, coefficient atoms and the functions of integer atoms. -/
 structure LV where
@@ -50,8 +60,10 @@ def pos (d N : ℕ) : Finset ℕ := (range N).filter fun i => d ^ i < N
 def lsum (ks : List ℤ) (xs : List ℤ) (g : ℤ → ℤ) : ℤ := (List.zipWith (fun c x => c * g x) ks xs).sum
 
 /-- The built-in atoms: `0` digit product, `1` exclusive or, `2` the reduced argument, `3`
-digit condition, `4` repunit, `5` bit, `6` digit sum, `7` power of two, `8` a dimension's
-value. -/
+digit condition, `4` repunit, `5` bit, `6` digit sum, `7` power `d^x` (`d = 2` by default), `8`
+a dimension's value, `9` digit `j` of `x`, `10` the low `j` digits of `x`, `11` the digits of
+`x` from `j` on, `12` the quotient of two dimensions, `13` the remainder modulo a dimension
+less one. -/
 def bfn (f : ℕ) (ks : List ℤ) (dp : List ℕ) (xs : List ℤ) : ℤ :=
   let d := dp.getD 0 2
   let N := dp.getD 1 1
@@ -64,8 +76,13 @@ def bfn (f : ℕ) (ks : List ℤ) (dp : List ℕ) (xs : List ℤ) : ℤ :=
   | 4 => ((N - 1) / (d - 1) : ℕ)
   | 5 => xs.getD 0 0 / 2 ^ (xs.getD 1 0).toNat % 2
   | 6 => ∑ i ∈ pos d N, dig d i (xs.getD 0 0)
-  | 7 => 2 ^ (xs.getD 0 0).toNat
+  | 7 => (d : ℤ) ^ (xs.getD 0 0).toNat
   | 8 => ((dp.getD 0 1 : ℕ) : ℤ)
+  | 9 => dig d (xs.getD 1 0).toNat (xs.getD 0 0)
+  | 10 => xs.getD 0 0 % (d : ℤ) ^ (xs.getD 1 0).toNat
+  | 11 => xs.getD 0 0 / (d : ℤ) ^ (xs.getD 1 0).toNat
+  | 12 => ((dp.getD 0 0 / dp.getD 1 1 : ℕ) : ℤ)
+  | 13 => xs.getD 0 0 % ((dp.getD 0 1 : ℤ) - 1)
   | _ => 0
 
 /-- An argument's value. -/
@@ -100,7 +117,17 @@ structure ATm where
   ats : List Atom
   dels : List Fac
   phs : List Fac
-  deriving DecidableEq, Repr
+  deriving Repr
+
+/-- Equality of terms, field by field. -/
+def ATm.beq (a b : ATm) : Bool :=
+  decide (a.c = b.c) && decide (a.sums = b.sums) && decide (a.ats = b.ats) &&
+    decide (a.dels = b.dels) && decide (a.phs = b.phs)
+
+theorem ATm.beq_iff (a b : ATm) : a.beq b = true ↔ a = b := by
+  cases a; cases b; simp [ATm.beq, and_assoc]
+
+instance : DecidableEq ATm := fun a b => decidable_of_iff _ (ATm.beq_iff a b)
 
 /-- The variables a term's factors read. -/
 def fvs (t : ATm) : List ℕ := (t.dels ++ t.phs).flatMap facVars

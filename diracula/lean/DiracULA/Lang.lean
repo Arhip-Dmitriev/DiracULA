@@ -2,7 +2,7 @@
 Copyright 2026 Arkhip A. Dmitriev
 Licensed under the Apache License, Version 2.0.
 -/
-import DiracULA.LCanon
+import DiracULA.LPass
 
 /-!
 # The meaning of .ula programs
@@ -57,6 +57,8 @@ inductive Prog where
   /-- `step` applied `cnt` times to `init` over registers of levels `L`, iteration `i` reading
   `J = lo + i`; `inv` is the closed form after the iterations before `J`. -/
   | loop (L : List DMon) (J : ℕ) (lo : ℤ) (cnt : IPoly) (step init : Prog) (inv : List ATm)
+  /-- `Σ_{x < D} body`. -/
+  | sum (D : DMon) (x : ℕ) (body : Prog)
 
 /-- `k` iterations of `u` from `s`, iteration `i` reading `J = lo + i`. -/
 noncomputable def loopSem (dv : ℕ → ℕ) (L : List DMon) (J : ℕ) (lo : ℤ) (u s : Fn) : ℕ → Fn
@@ -77,6 +79,7 @@ noncomputable def Prog.sem (V : LV) : Prog → Fn
   | .cnj a => fun ν => starRingEnd ℂ (a.sem V ν)
   | .loop L J lo cnt step init _ => fun ν =>
       loopSem V.ρ.dv L J lo (step.sem V) (init.sem V) (ipDen ν cnt).toNat ν
+  | .sum D x b => fun ν => ∑ j ∈ range (D.den V.ρ.dv), b.sem V (Function.update ν x j)
 
 /-- The iteration counts of a program's loops. -/
 def Prog.counts : Prog → List IPoly
@@ -88,6 +91,7 @@ def Prog.counts : Prog → List IPoly
   | .inn _ a b => a.counts ++ b.counts
   | .cnj a => a.counts
   | .loop _ _ _ c s i _ => c :: (s.counts ++ i.counts)
+  | .sum _ _ b => b.counts
 
 /-! ## Tuples -/
 
@@ -279,8 +283,28 @@ theorem tenSym_ok (V : LV) (hρ : V.ρ.OK) (k : ℕ) (a b e : List ATm) (h : ten
 
 /-! ## Conjugates -/
 
+/-- Exponents of atoms `2 j` and `2 j + 1` exchanged. -/
+def pswap : List ℤ → List ℤ
+  | [] => []
+  | [a] => [0, a]
+  | a :: b :: l => b :: a :: pswap l
+
 def cConj (c : CMon) : CMon :=
-  ⟨(CMon.rnorm c.q (-c.r)).1, (CMon.rnorm c.q (-c.r)).2, c.sq, c.rc, c.am, c.gc⟩
+  ⟨(CMon.rnorm c.q (-c.r)).1, (CMon.rnorm c.q (-c.r)).2, c.sq, c.rc, pswap c.am, c.gc⟩
+
+theorem conj_zpw_pair (ρ : Val) (hρ : ρ.OK) (l : List ℤ) (j : ℕ) :
+    starRingEnd ℂ (zpw ρ.atom (2 * j) l) = zpw ρ.atom (2 * j) (pswap l) := by
+  have h1 : ∀ j, starRingEnd ℂ (ρ.atom (2 * j)) = ρ.atom (2 * j + 1) := fun j => (hρ.aconj j).symm
+  have h2 : ∀ j, starRingEnd ℂ (ρ.atom (2 * j + 1)) = ρ.atom (2 * j) := fun j => by
+    rw [hρ.aconj j, Complex.conj_conj]
+  induction l using pswap.induct generalizing j with
+  | case1 => simp [zpw, pswap]
+  | case2 a => simp [zpw, pswap, map_zpow₀, h1]
+  | case3 a b l ih =>
+    simp only [zpw, pswap, map_mul, map_zpow₀, h1, h2]
+    have := ih (j + 1)
+    rw [show 2 * (j + 1) = 2 * j + 1 + 1 by ring] at this
+    rw [this]; ring
 
 theorem conj_ex (r : ℝ) : starRingEnd ℂ (ex r) = ex (-r) := by
   simp only [ex, ← Complex.exp_conj]
@@ -294,7 +318,7 @@ theorem conj_zpw (f : ℕ → ℂ) (hf : ∀ i, starRingEnd ℂ (f i) = f i) (k 
   | nil => simp [zpw]
   | cons a l ih => simp only [zpw, map_mul, map_zpow₀, hf, ih]
 
-theorem conj_cden (ρ : Val) (c : CMon) (h : c.am = []) :
+theorem conj_cden (ρ : Val) (hρ : ρ.OK) (c : CMon) :
     starRingEnd ℂ (c.den ρ) = (cConj c).den ρ := by
   have hr := rnorm_den c.q (-c.r)
   have hrt : ∀ x : ℕ, starRingEnd ℂ (rt x) = rt x := fun x => Complex.conj_ofReal _
@@ -305,18 +329,16 @@ theorem conj_cden (ρ : Val) (c : CMon) (h : c.am = []) :
     exact congrArg _ (List.map_congr_left fun g _ => by simp [gcdV])
   have e3 : starRingEnd ℂ (zpw (rtv ρ.dv) 0 c.sq) = zpw (rtv ρ.dv) 0 c.sq :=
     conj_zpw _ (fun i => hrt _) _ _
-  simp only [CMon.den, cConj, h, map_mul, map_ratCast, conj_ex, e1, e2, e3]
+  have e4 : starRingEnd ℂ (zpw ρ.atom 0 c.am) = zpw ρ.atom 0 (pswap c.am) := by
+    simpa using conj_zpw_pair ρ hρ c.am 0
+  simp only [CMon.den, cConj, map_mul, map_ratCast, conj_ex, e1, e2, e3, e4]
   have hr' : ((CMon.rnorm c.q (-c.r)).1 : ℂ) * ex ((CMon.rnorm c.q (-c.r)).2 : ℝ) =
       (c.q : ℂ) * ex (-(c.r : ℝ)) := by rw [hr]; push_cast; rfl
   rw [← hr']
-  simp [zpw]
 
 /-- The conjugate term. -/
 def tConj (t : ATm) : ATm :=
   ⟨cConj t.c, t.sums, t.ats, t.dels, t.phs.map fun f => (f.1, ipSmul (-1) f.2)⟩
-
-/-- No term has coefficient atoms. -/
-def conjOK (e : List ATm) : Bool := e.all fun t => t.c.am.isEmpty
 
 theorem conj_sumsV (dv : ℕ → ℕ) (s : List (ℕ × DMon)) (f g : (ℕ → ℤ) → ℂ)
     (h : ∀ μ, starRingEnd ℂ (f μ) = g μ) (ν : ℕ → ℤ) :
@@ -335,19 +357,18 @@ theorem conj_body (V : LV) (t : ATm) (μ : ℕ → ℤ) :
   · congr 1; refine List.map_congr_left fun f _ => ?_
     simp only [Function.comp_apply, phV, map_zpow₀, conj_om, ipDen_smul, inv_zpow', neg_one_mul]
 
-theorem conj_den (V : LV) (t : ATm) (h : t.c.am = []) (ν : ℕ → ℤ) :
+theorem conj_den (V : LV) (hρ : V.ρ.OK) (t : ATm) (ν : ℕ → ℤ) :
     starRingEnd ℂ (t.den V ν) = (tConj t).den V ν := by
   unfold ATm.den
-  rw [map_mul, conj_cden V.ρ t.c h, conj_sumsV _ _ _ _ (conj_body V t)]
+  rw [map_mul, conj_cden V.ρ hρ t.c, conj_sumsV _ _ _ _ (conj_body V t)]
   rfl
 
-theorem axDen_conj (V : LV) (e : List ATm) (h : conjOK e = true) (ν : ℕ → ℤ) :
+theorem axDen_conj (V : LV) (hρ : V.ρ.OK) (e : List ATm) (ν : ℕ → ℤ) :
     starRingEnd ℂ (axDen V ν e) = axDen V ν (e.map tConj) := by
-  simp only [conjOK, List.all_eq_true, List.isEmpty_iff] at h
   unfold axDen
   rw [map_list_sum, List.map_map, List.map_map]
   congr 1
-  exact List.map_congr_left fun t ht => conj_den V t (h t ht) ν
+  exact List.map_congr_left fun t _ => conj_den V hρ t ν
 
 /-! ## Inner products -/
 
@@ -356,7 +377,7 @@ def toIn (k v : ℕ) : ℕ := if v < k then IN + v else v
 
 /-- `⟨a|b⟩` as one expression: the conjugate of `a` read on input registers, applied to `b`. -/
 def innSym (L : List DMon) (a b : List ATm) : Option (List ATm) :=
-  if conjOK a && renOKA (toIn L.length) (a.map tConj) && avoids IN L.length a then
+  if renOKA (toIn L.length) (a.map tConj) && avoids IN L.length a then
     appSym L (axRen (toIn L.length) (a.map tConj)) b
   else none
 
@@ -367,11 +388,11 @@ theorem innSym_ok (V : LV) (hρ : V.ρ.OK) (L : List DMon) (a b e : List ATm)
   unfold innSym at h
   split_ifs at h with hc
   simp only [Bool.and_eq_true] at hc
-  obtain ⟨⟨hc1, hc2⟩, hc3⟩ := hc
+  obtain ⟨hc2, hc3⟩ := hc
   rw [appSym_ok V hρ L _ b e h]
   refine sumT_congr _ _ _ fun js hjs => ?_
   simp only [List.length_map] at hjs
-  rw [axDen_ren V _ _ hc2, axDen_conj V a hc1]
+  rw [axDen_ren V _ _ hc2, axDen_conj V hρ a]
   congr 1
   have hv : ∀ v ∈ axVs (a.map tConj), (setL ν IN js ∘ toIn L.length) v = setL ν 0 js v := by
     intro v hv
@@ -468,15 +489,28 @@ theorem axDen_tSub (V : LV) (x : ℕ) (v : IPoly) (e : List ATm) (h : e.all (sub
   congr 1
   exact List.map_congr_left fun t ht => tSub_den V x v t (h t ht) ν
 
+/-- The invariant after one more iteration with its atoms at `J + 1` rewritten, for `0 ≤ lo`. -/
+def jPass (lo : ℤ) (J : ℕ) (e : List ATm) : List ATm := if 0 ≤ lo then xpass ⟨[J], [], []⟩ e else e
+
+theorem axDen_jPass (V : LV) (hρ : V.ρ.OK) (lo : ℤ) (J : ℕ) (e : List ATm) (ν : ℕ → ℤ)
+    (h : lo ≤ ν J) : axDen V ν (jPass lo J e) = axDen V ν e := by
+  unfold jPass
+  split_ifs with h0
+  · refine axDen_xpass V hρ _ e ν ⟨fun j hj => ?_, fun w hw => by simp at hw, fun w hw => by simp at hw⟩
+    simp only [List.mem_singleton] at hj
+    subst hj; omega
+  · rfl
+
 /-- The checks of a loop: the invariant at `J = lo` is the initial state and one step takes
 the invariant at `J` to the invariant at `J + 1`. -/
 def loopChk (fl : List ℕ) (PW : List (DMon × DMon)) (L : List DMon) (J : ℕ) (lo : ℤ)
     (s i0 inv : List ATm) : Bool :=
   decide (2 * IN ≤ J) && inv.all (subOK J (ipC lo)) &&
     inv.all (subOK J (ipAdd (ipV J) (ipC 1))) &&
-    (nfA fl PW (i0 ++ axNeg (inv.map (tSub J (ipC lo))))).isEmpty &&
+    close2 fl PW ⟨[], [], []⟩ (i0 ++ axNeg (inv.map (tSub J (ipC lo)))) &&
     (match appSym L (apart (fresh s inv) s) inv with
-     | some e1 => (nfA fl PW (e1 ++ axNeg (inv.map (tSub J (ipAdd (ipV J) (ipC 1)))))).isEmpty
+     | some e1 =>
+       close2 fl PW ⟨[], [], []⟩ (e1 ++ axNeg (jPass lo J (inv.map (tSub J (ipAdd (ipV J) (ipC 1))))))
      | none => false)
 
 theorem setL_update (ν : ℕ → ℤ) (b : ℕ) (js : List ℤ) (J : ℕ) (hJ : b + js.length ≤ J)
@@ -493,11 +527,13 @@ theorem loop_inv (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ
     (hL : L.length < IN) (h : loopChk fl PW L J lo s i0 inv = true) (k : ℕ) (ν : ℕ → ℤ) :
     loopSem V.ρ.dv L J lo u w k ν = axDen V (Function.update ν J (lo + k)) inv := by
   unfold loopChk at h
-  simp only [Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff] at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
   obtain ⟨⟨⟨⟨hJ, hs0⟩, hs1⟩, h0⟩, h1⟩ := h
+  have hC0 : ∀ μ, CtxOK V ⟨[], [], []⟩ μ := fun μ =>
+    ⟨fun j hj => by simp at hj, fun w hw => by simp at hw, fun w hw => by simp at hw⟩
   induction k generalizing ν with
   | zero =>
-    have hz := nfA_zero V hρ fl hfl PW hPW _ h0 ν
+    have hz := close2_ok V hρ fl hfl PW hPW _ _ h0 ν (hC0 ν)
     rw [axDen_append, axDen_neg, axDen_tSub V J _ inv hs0] at hz
     simp only [loopSem, hw, Nat.cast_zero, add_zero]
     rw [show (lo : ℤ) = ipDen ν (ipC lo) from (ipDen_C ν lo).symm]
@@ -506,8 +542,9 @@ theorem loop_inv (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ
     split at h1
     · next e1 he1 =>
       set μ := Function.update ν J (lo + k)
-      have hz := nfA_zero V hρ fl hfl PW hPW _ (List.isEmpty_iff.1 h1) μ
-      rw [axDen_append, axDen_neg, axDen_tSub V J _ inv hs1, appSym_ok V hρ L _ inv e1 he1] at hz
+      have hz := close2_ok V hρ fl hfl PW hPW _ _ h1 μ (hC0 μ)
+      rw [axDen_append, axDen_neg, axDen_jPass V hρ lo J _ μ (by simp [μ]),
+        axDen_tSub V J _ inv hs1, appSym_ok V hρ L _ inv e1 he1] at hz
       have e2 : ipDen μ (ipAdd (ipV J) (ipC 1)) = lo + (k + 1 : ℕ) := by
         simp only [ipDen_add, ipDen_V, ipDen_C, μ, Function.update_self]; push_cast; ring
       rw [e2, Function.update_idem] at hz
@@ -548,7 +585,7 @@ def Prog.sym (fl : List ℕ) (PW : List (DMon × DMon)) : Prog → Option (List 
     | _, _ => none
   | .cnj a =>
     match a.sym fl PW with
-    | some x => if conjOK x then some (x.map tConj) else none
+    | some x => some (x.map tConj)
     | none => none
   | .loop L J lo cnt step init inv =>
     match step.sym fl PW, init.sym fl PW with
@@ -560,6 +597,10 @@ def Prog.sym (fl : List ℕ) (PW : List (DMon × DMon)) : Prog → Option (List 
         some (inv.map (tSub J (ipAdd (ipC lo) cnt)))
       else none
     | _, _ => none
+  | .sum D x b =>
+    match b.sym fl PW with
+    | some e => if b.counts = [] then some (axSums [(x, D)] e) else none
+    | none => none
 
 /-- Every loop count of `p` is nonnegative at each valuation agreeing with `ν` from `2 IN` on. -/
 def HiOK (p : Prog) (ν : ℕ → ℤ) : Prop :=
@@ -651,12 +692,11 @@ theorem Prog.sym_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
     simp only [Prog.sym] at h
     split at h
     · next x hx =>
-      split_ifs at h with hcj
       simp only [Option.some.injEq] at h
       subst h
       simp only [Prog.sem]
       rw [iha x hx _ (hc.sub (fun c h' => by simp [Prog.counts, h']) _ fun _ _ => rfl),
-        axDen_conj V x hcj]
+        axDen_conj V hρ x]
     · simp at h
   | loop L J lo cnt step init inv ihs ihi =>
     simp only [Prog.sym] at h
@@ -674,6 +714,18 @@ theorem Prog.sym_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
       simp only [Prog.sem]
       rw [loop_inv V hρ fl hfl PW hPW L J lo x y inv _ _ hu hw hL hchk, axDen_tSub V J _ inv hsub,
         ipDen_add, ipDen_C, Int.toNat_of_nonneg h0]
+    · simp at h
+  | sum D x b ih =>
+    simp only [Prog.sym] at h
+    split at h
+    · next e' he =>
+      split_ifs at h with hcb
+      simp only [Option.some.injEq] at h
+      subst h
+      simp only [Prog.sem]
+      rw [axDen_sums]
+      simp only [sumsV]
+      exact Finset.sum_congr rfl fun j _ => ih e' he _ fun c h' => by simp [hcb] at h'
     · simp at h
 
 /-! ## Certificates -/
@@ -718,6 +770,59 @@ theorem certify_lit_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl
   rw [Prog.sym_ok V hρ fl hfl PW hPW p e he ν (hi_of p hv ν hc)]
   linear_combination hz'
 
+/-- `certify_lit_c` with the program's expression rewritten under the context `C`, at every
+valuation where it holds. -/
+theorem certify_w_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (C : Ctx) (p : Prog)
+    (r e : List ATm) (ns : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hn : (xpass C e ++ axNeg r).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hv : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, CtxOK V C ν → (∀ c ∈ p.counts, 0 ≤ ipDen ν c) → p.sem V ν = axDen V ν r := by
+  intro ν hW hc
+  have hz' := nfA_zero V hρ fl hfl PW hPW _ (by rw [nfA_of_lit fl PW _ ns hn, hz]) ν
+  rw [axDen_append, axDen_neg, axDen_xpass V hρ _ e ν hW] at hz'
+  rw [Prog.sym_ok V hρ fl hfl PW hPW p e he ν (hi_of p hv ν hc)]
+  linear_combination hz'
+
+/-- `certify_w_c` with a second round: the normal form of the difference passed under the context
+again and normalised. -/
+theorem certify_w2_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (C : Ctx) (p : Prog)
+    (r e : List ATm) (ns ns2 : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hn : (xpass C e ++ axNeg r).map (normA fl PW AROUNDS) = ns)
+    (hn2 : (xpass C ((ns.filterMap id).foldl (fun acc t => taAdd t acc) [])).map
+      (normA fl PW AROUNDS) = ns2)
+    (hz : (ns2.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hv : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, CtxOK V C ν → (∀ c ∈ p.counts, 0 ≤ ipDen ν c) → p.sem V ν = axDen V ν r := by
+  intro ν hW hc
+  have h1 := nfA_den V hρ fl hfl PW hPW (xpass C e ++ axNeg r) ν
+  rw [nfA_of_lit fl PW _ ns hn] at h1
+  have hz' := nfA_zero V hρ fl hfl PW hPW _ (by rw [nfA_of_lit fl PW _ ns2 hn2, hz]) ν
+  rw [axDen_xpass V hρ C _ ν hW, h1, axDen_append, axDen_neg, axDen_xpass V hρ _ e ν hW] at hz'
+  rw [Prog.sym_ok V hρ fl hfl PW hPW p e he ν (hi_of p hv ν hc)]
+  linear_combination hz'
+
+/-- `certify_eq_w_c` with a second round. -/
+theorem certify_eq_w2_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (C : Ctx) (p q : Prog)
+    (e r : List ATm) (ns ns2 : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hr : q.sym fl PW = some r)
+    (hn : (xpass C e ++ axNeg r).map (normA fl PW AROUNDS) = ns)
+    (hn2 : (xpass C ((ns.filterMap id).foldl (fun acc t => taAdd t acc) [])).map
+      (normA fl PW AROUNDS) = ns2)
+    (hz : (ns2.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hvp : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v)
+    (hvq : ∀ c ∈ q.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, CtxOK V C ν → (∀ c ∈ p.counts ++ q.counts, 0 ≤ ipDen ν c) →
+      p.sem V ν = q.sem V ν := by
+  intro ν hW hc
+  rw [certify_w2_c V hρ fl hfl PW hPW C p r e ns ns2 he hn hn2 hz hvp ν hW
+    (fun c h' => hc c (List.mem_append_left _ h')),
+    Prog.sym_ok V hρ fl hfl PW hPW q r hr ν (hi_of q hvq ν fun c h' => hc c
+      (List.mem_append_right _ h'))]
+
 /-- `certify_lit_c` for a program without loops. -/
 theorem certify_lit (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
     (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (p : Prog) (r e : List ATm)
@@ -743,6 +848,23 @@ theorem certify_eq_lit_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK
     Prog.sym_ok V hρ fl hfl PW hPW q r hr ν (hi_of q hvq ν fun c h' => hc c
       (List.mem_append_right _ h'))]
 
+/-- `certify_eq_lit_c` with the left program's expression rewritten under the context `C`. -/
+theorem certify_eq_w_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (C : Ctx) (p q : Prog)
+    (e r : List ATm) (ns : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hr : q.sym fl PW = some r)
+    (hn : (xpass C e ++ axNeg r).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hvp : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v)
+    (hvq : ∀ c ∈ q.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, CtxOK V C ν → (∀ c ∈ p.counts ++ q.counts, 0 ≤ ipDen ν c) →
+      p.sem V ν = q.sem V ν := by
+  intro ν hW hc
+  rw [certify_w_c V hρ fl hfl PW hPW C p r e ns he hn hz hvp ν hW
+    (fun c h' => hc c (List.mem_append_left _ h')),
+    Prog.sym_ok V hρ fl hfl PW hPW q r hr ν (hi_of q hvq ν fun c h' => hc c
+      (List.mem_append_right _ h'))]
+
 /-- `certify_eq_lit_c` for programs without loops. -/
 theorem certify_eq_lit (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
     (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (p q : Prog) (e r : List ATm)
@@ -754,5 +876,83 @@ theorem certify_eq_lit (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK f
   funext ν
   exact certify_eq_lit_c V hρ fl hfl PW hPW p q e r ns he hr hn hz (by simp [hcp])
     (by simp [hcq]) ν (by simp [hcp, hcq])
+
+/-! ## Normalisation -/
+
+/-- Whether a term is a coefficient alone whose value is a positive real. -/
+def posC (t : ATm) : Bool :=
+  t.sums.isEmpty && t.ats.isEmpty && t.dels.isEmpty && t.phs.isEmpty && t.c.r == 0 &&
+    t.c.am.isEmpty && t.c.gc.isEmpty && decide (0 < t.c.q) && t.c.rc.all (0 < ·)
+
+theorem zpw_rtv_pos (dv : ℕ → ℕ) (hd : ∀ i, 0 < dv i) :
+    ∀ (k : ℕ) (l : List ℤ), ∃ x : ℝ, 0 < x ∧ zpw (rtv dv) k l = x
+  | _, [] => ⟨1, one_pos, by simp [zpw]⟩
+  | k, a :: v => by
+    obtain ⟨x, hx, hxe⟩ := zpw_rtv_pos dv hd (k + 1) v
+    have hs : 0 < Real.sqrt (dv k) := Real.sqrt_pos.2 (by exact_mod_cast hd k)
+    refine ⟨Real.sqrt (dv k) ^ a * x, mul_pos (zpow_pos hs a) hx, ?_⟩
+    simp only [zpw, hxe, rtv, rt]
+    push_cast; ring
+
+theorem rc_pos (l : List ℕ) (h : l.all (0 < ·) = true) : ∃ x : ℝ, 0 < x ∧ (l.map rt).prod = x := by
+  induction l with
+  | nil => exact ⟨1, one_pos, by simp⟩
+  | cons c l ih =>
+    simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨x, hx, hxe⟩ := ih h.2
+    refine ⟨Real.sqrt c * x, mul_pos (Real.sqrt_pos.2 (by exact_mod_cast h.1)) hx, ?_⟩
+    simp only [List.map_cons, List.prod_cons, hxe, rt]
+    push_cast; ring
+
+theorem posC_val (V : LV) (hρ : V.ρ.OK) (t : ATm) (h : posC t = true) (ν : ℕ → ℤ) :
+    ∃ x : ℝ, 0 < x ∧ axDen V ν [t] = x := by
+  obtain ⟨c, sums, ats, dels, phs⟩ := t
+  simp only [posC, Bool.and_eq_true, List.isEmpty_iff, beq_iff_eq, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨hs, ha⟩, hd⟩, hp⟩, hr⟩, ham⟩, hgc⟩, hq⟩, hrc⟩ := h
+  subst hs ha hd hp
+  obtain ⟨x, hx, hxe⟩ := zpw_rtv_pos V.ρ.dv hρ.dpos 0 c.sq
+  obtain ⟨y, hy, hye⟩ := rc_pos c.rc hrc
+  refine ⟨(c.q : ℝ) * x * y, mul_pos (mul_pos (by exact_mod_cast hq) hx) hy, ?_⟩
+  simp only [axDen, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero, ATm.den,
+    CMon.den, hr, ham, hgc, hxe, hye, zpw, List.map_nil, List.prod_nil]
+  simp [sumsV, abody, bodyOf, ex_zero]
+
+theorem nrm_of (x : ℝ) (hx : 0 < x) (z w : ℂ) (hz : (x : ℂ) * x * z = 1) :
+    (x : ℂ) * w = ((Real.sqrt z.re : ℝ) : ℂ)⁻¹ * w := by
+  have hz' : z = (((x * x)⁻¹ : ℝ) : ℂ) := by
+    push_cast
+    exact eq_inv_of_mul_eq_one_right hz
+  rw [hz', Complex.ofReal_re, Real.sqrt_inv, Real.sqrt_mul_self hx.le, Complex.ofReal_inv, inv_inv]
+
+/-- `k p` is `p` over the root of `⟨p|p⟩` when `k² ⟨p|p⟩ = 1` for a positive real coefficient
+`k`. -/
+theorem nrm_scale (V : LV) (hρ : V.ρ.OK) (L : List DMon) (p : Prog) (k : ATm)
+    (hk : posC k = true) (ν : ℕ → ℤ)
+    (hB : (Prog.mul (.mul (.leaf [k]) (.leaf [k])) (.inn L p p)).sem V ν =
+      axDen V ν [⟨CMon.ofQ 1, [], [], [], []⟩]) :
+    (Prog.mul (.leaf [k]) p).sem V ν =
+      ((Real.sqrt ((Prog.inn L p p).sem V ν).re : ℝ) : ℂ)⁻¹ * p.sem V ν := by
+  obtain ⟨x, hx, hxe⟩ := posC_val V hρ k hk ν
+  have h1 : axDen V ν [⟨CMon.ofQ 1, [], [], [], []⟩] = 1 := by
+    simp [axDen, ATm.den, CMon.den, CMon.ofQ, ex_zero, zpw, sumsV, abody, bodyOf]
+  simp only [Prog.sem, hxe] at hB ⊢
+  rw [h1] at hB
+  exact nrm_of x hx _ _ hB
+
+/-- `r` is `p` over the root of `⟨p|p⟩` when `k p = r` and `k² ⟨p|p⟩ = 1` for a positive real
+coefficient `k`. -/
+theorem nrm_cert (V : LV) (hρ : V.ρ.OK) (L : List DMon) (p : Prog) (r : List ATm) (k : ATm)
+    (hk : posC k = true) (ν : ℕ → ℤ)
+    (hA : (Prog.mul (.leaf [k]) p).sem V ν = axDen V ν r)
+    (hB : (Prog.mul (.mul (.leaf [k]) (.leaf [k])) (.inn L p p)).sem V ν =
+      axDen V ν [⟨CMon.ofQ 1, [], [], [], []⟩]) :
+    axDen V ν r = ((Real.sqrt ((Prog.inn L p p).sem V ν).re : ℝ) : ℂ)⁻¹ * p.sem V ν := by
+  obtain ⟨x, hx, hxe⟩ := posC_val V hρ k hk ν
+  have h1 : axDen V ν [⟨CMon.ofQ 1, [], [], [], []⟩] = 1 := by
+    simp [axDen, ATm.den, CMon.den, CMon.ofQ, ex_zero, zpw, sumsV, abody, bodyOf]
+  simp only [Prog.sem, hxe] at hA hB
+  rw [h1] at hB
+  rw [← hA]
+  exact nrm_of x hx _ _ hB
 
 end DiracULA.Lang

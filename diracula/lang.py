@@ -61,6 +61,7 @@ latest statement.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -567,6 +568,19 @@ _TYPES = {
 }
 
 
+def _names_in(node: object) -> list[Name]:
+    """The names an expression tree reads, in order."""
+    if isinstance(node, Name):
+        return [node]
+    out: list[Name] = []
+    if dataclasses.is_dataclass(node):
+        for f in dataclasses.fields(node):
+            v = getattr(node, f.name)
+            for x in v if isinstance(v, (list, tuple)) else [v]:
+                out += _names_in(x)
+    return out
+
+
 def _bitlen(v: sympy.Expr) -> sympy.Expr:
     if v.is_Integer:
         return sympy.Integer(int(v).bit_length())
@@ -980,6 +994,7 @@ class Interpreter:
         self.slots: dict[str, list[tuple[str, str | None]]] = {}
         self.states: dict[str, P.State | P.Mixed] = {}
         self.lists: dict[str, list[tuple[D.Label | None, object]]] = {}
+        self.list_nodes: dict[str, list[object]] = {}
         self.trees: dict[str, LL.GateTree] = {}
         """Each gate's pattern, body syntax tree and source, for certificates."""
         self.log: list[LL.Event] = []
@@ -997,6 +1012,7 @@ class Interpreter:
         self.asserts = 0
         self.cert_names: dict[str, int] = {}
         self.measured: list[tuple[str, P.Distribution, int]] = []
+        self.norms: dict[int, list[sympy.Expr]] = {}
         """Each measurement: the state, its distribution and the log position before it."""
         self._text = ""
         for stmt in _split_statements(PRELUDE):
@@ -1356,6 +1372,7 @@ class Interpreter:
             self.trees, self.log, lambda t: self._parser(tokenize(t)).expr(), self.script, funcs
         )
         cert.assumptions = list(self.assumptions)
+        cert.norms = self.norms
         return cert
 
     def certify(self, name: str) -> str:
@@ -1397,6 +1414,22 @@ class Interpreter:
         cert.outcome_fn = lambda v: self._outcome_image(node, v)
         return cert.certify_dist(name, label, at, values, raw, mapped)
 
+    def _certify_dist_expr(
+        self, cert: LL.Certifier, node: object, source: str, value: P.Distribution
+    ) -> str:
+        """The certificate of a shown expression over measured variables: the pushforward of
+        their measurement."""
+        names = [n.id for n in _names_in(node) if isinstance(self.values.get(n.id), P.Distribution)]
+        if not names or names[0] not in self.var_trees:
+            raise LL.CertifyError(f"{source} reads no measured variable")
+        _, upto, values = self.var_trees[names[0]]
+        found = [m for m in self.measured if m[2] >= upto]
+        if not found:
+            raise LL.CertifyError(f"{source} reads no measurement")
+        label, raw, at = found[0]
+        cert.outcome_fn = lambda v: self._outcome_image(node, v)
+        return cert.certify_dist(f"show {source}", label, at, values, raw, value)
+
     def _outcome_image(self, node: object, v: sympy.Expr) -> sympy.Expr:
         """The value ``node`` takes with its measurement replaced by ``v``."""
         if isinstance(node, MeasureNode):
@@ -1411,6 +1444,10 @@ class Interpreter:
             return {"+": a + b, "-": a - b, "*": a * b, "/": a / b, "%": sympy.Mod(a, b)}[node.op]
         if isinstance(node, Num):
             return node.value
+        if isinstance(node, Name) and isinstance(self.values.get(node.id), sympy.Basic):
+            return self.values[node.id]
+        if isinstance(node, Name) and isinstance(self.values.get(node.id), P.Distribution):
+            return self._outcome_image(self.var_trees[node.id][0], v)
         raise LL.CertifyError("a function of outcomes this exporter does not read")
 
     def _write_cert(self, script: str, name: str, source: str) -> str:
@@ -1595,6 +1632,7 @@ class Interpreter:
         source = text.split("=", 1)[1].strip()
         if isinstance(pattern, (MatrixNode, MatrixFor)) and p.done():
             self.ops[name] = self._matrix_gate(name, pattern, Ctx(), None, source)
+            self.trees[name] = LL.GateTree((), pattern, source)
             self.last = Echo(D.Label("op", name), "gate", self.ops[name])
             return
         p.take("->")
@@ -1761,14 +1799,18 @@ class Interpreter:
         p.take("=")
         p.take("{")
         items: list[tuple[D.Label | None, object]] = []
+        nodes: list[object] = []
         while not p.at("}"):
-            items.extend(self._entries(p.expr()))
+            node = p.expr()
+            nodes.append(node)
+            items.extend(self._entries(node))
             if not p.at("}"):
                 p.take(",")
         p.take("}")
         if not p.done():
             raise LangSyntaxError("unexpected text after the list")
         self.lists[name] = items
+        self.list_nodes[name] = nodes
         self.last = Echo(D.Label("list", name), "list", items)
 
     def _arguments(self, toks: list[Tok], text: str, word: str) -> list[tuple[object, str]]:
@@ -1811,13 +1853,69 @@ class Interpreter:
     def _certify_shown(self, nodes: list[tuple[object, str]]) -> str:
         """A certificate per shown named state; a report line each."""
         lines = []
+        expanded: list[tuple[object, str]] = []
         for node, source in nodes:
+            if isinstance(node, Name) and node.id in self.list_nodes:
+                for item in self.list_nodes[node.id]:
+                    if isinstance(item, Braket) and item.bra:
+                        item = Braket(item.content, False, item.dim)
+                    expanded.append((item, ""))
+            else:
+                expanded.append((node, source))
+        for node, source in expanded:
+            if not source:
+                source = (
+                    node.content.strip()
+                    if isinstance(node, Braket)
+                    else node.id
+                    if isinstance(node, Name)
+                    else repr(node)
+                )
             name = node.content.strip() if isinstance(node, Braket) else source
             try:
-                lines.append(self.certify(name))
+                if name not in self.states and name not in self.var_trees:
+                    lines.append(self._certify_expr(node, source))
+                else:
+                    lines.append(self.certify(name))
             except LangError as exc:
                 lines.append(f"lean: {exc}")
         return "\n".join(lines)
+
+    def _certify_expr(self, node: object, source: str) -> str:
+        """The certificate of a shown state expression; its report line."""
+        cert = self._certifier()
+        try:
+            try:
+                value = self._eval(node, Ctx())
+            except LangError as exc:
+                raise LL.CertifyError(str(exc)) from exc
+            if isinstance(value, P.Operator):
+                act = self._action(value)
+                try:
+                    src = cert.certify_op(source, node, dict(self.values), value)
+                except LL.CertifyError:
+                    if act is None:
+                        raise
+                    src = cert.certify_action(source, node, dict(self.values), act.probe, act.image)
+            elif isinstance(value, sympy.Basic):
+                src = cert.certify_scalar(
+                    f"show {source}", node, len(self.log), dict(self.values), value
+                )
+            elif isinstance(value, P.Distribution):
+                src = self._certify_dist_expr(cert, node, source, value)
+            elif not isinstance(value, P.State) or isinstance(value, P.Mixed):
+                raise LL.CertifyError(f"{source} is not a state or a scalar variable")
+            elif isinstance(node, Call) and node.name == "normalise" and len(node.args) == 1:
+                arg = self._eval(node.args[0], Ctx())
+                if not isinstance(arg, P.State) or isinstance(arg, P.Mixed) or arg.bra:
+                    raise LL.CertifyError("normalise of a bra or a density matrix")
+                norm = P.tidy(sympy.sqrt(P.inner(P.dagger(arg), arg)))
+                src = cert.certify_norm(source, node, dict(self.values), value, norm)
+            else:
+                src = cert.certify_expr(source, node, dict(self.values), value)
+        except LL.CertifyError as exc:
+            raise LangError(f"cannot certify {source}: {exc}") from exc
+        return self._write_cert(cert.script, f"show {source}", src)
 
     def _stmt_print(self, toks: list[Tok], text: str, builtin: bool) -> str:
         parts: list[str] = []
@@ -2526,6 +2624,7 @@ class Interpreter:
             raise LangTypeError(f"normalise takes a state, got {self._kind(s)}")
         ket = P.dagger(s) if s.bra else s
         norm = P.tidy(sympy.sqrt(P.inner(P.dagger(ket), ket)))
+        self.norms.setdefault(id(node), []).append(norm)
         if norm == 0:
             raise LangTypeError("cannot normalise the zero vector")
         return _flex(P.simplify(P.scale(1 / norm, s)), _flags(s))

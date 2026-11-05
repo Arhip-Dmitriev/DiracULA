@@ -146,9 +146,17 @@ def ten_sym(k: int, a: Sequence[ATm], b: Sequence[ATm]) -> list[ATm] | None:
     return None
 
 
+def pswap(l: Sequence[int]) -> tuple[int, ...]:
+    """``pswap``."""
+    out: list[int] = []
+    for k in range(0, len(l), 2):
+        out += [l[k + 1], l[k]] if k + 1 < len(l) else [0, l[k]]
+    return tuple(out)
+
+
 def c_conj(c: Y.CMon) -> Y.CMon:
     q, r = Y.rnorm(c[0], -c[1])
-    return (q, r, c[2], c[3], c[4], c[5])
+    return (q, r, c[2], c[3], pswap(c[4]), c[5])
 
 
 def t_conj(t: ATm) -> ATm:
@@ -158,7 +166,7 @@ def t_conj(t: ATm) -> ATm:
 def inn_sym(levels: Sequence[Y.DMon], a: Sequence[ATm], b: Sequence[ATm]) -> list[ATm] | None:
     k = len(levels)
     ca = [t_conj(t) for t in a]
-    if all(not t[0][4] for t in a) and ren_oka(to_in(k), ca) and avoids(IN, k, a):
+    if ren_oka(to_in(k), ca) and avoids(IN, k, a):
         return app_sym(levels, ax_ren(to_in(k), ca), b)
     return None
 
@@ -199,10 +207,18 @@ def loop_chk(
         2 * IN <= j and all(sub_ok(j, v0, t) for t in inv) and all(sub_ok(j, v1, t) for t in inv)
     ):
         return False
-    if Z.nf_a(fl, pw, list(i0) + Z.ax_neg([t_sub(j, v0, t) for t in inv])):
+    c0: Z.Ctx = ((), (), ())
+    if not Z.close2(fl, pw, c0, list(i0) + Z.ax_neg([t_sub(j, v0, t) for t in inv])):
         return False
     e1 = app_sym(levels, apart(fresh(s, inv), s), inv)
-    return e1 is not None and not Z.nf_a(fl, pw, e1 + Z.ax_neg([t_sub(j, v1, t) for t in inv]))
+    return e1 is not None and Z.close2(
+        fl, pw, c0, e1 + Z.ax_neg(j_pass(lo, j, [t_sub(j, v1, t) for t in inv]))
+    )
+
+
+def j_pass(lo: int, j: int, e: Sequence[ATm]) -> list[ATm]:
+    """``jPass``."""
+    return Z.x_pass(((j,), (), ()), e) if 0 <= lo else list(e)
 
 
 @dataclass(frozen=True, eq=False)
@@ -246,9 +262,15 @@ def prog_sym(
         ):
             return [t_sub(j, v, t) for t in inv]
         return None
+    if p.kind == "sum":
+        d, x, body = p.args
+        e = prog_sym(body, fl, pw)
+        if e is None or counts(body):
+            return None
+        return ax_sums(((x, d),), e)
     if p.kind == "cnj":
         x0 = prog_sym(p.args[0], fl, pw)
-        if x0 is None or any(t[0][4] for t in x0):
+        if x0 is None:
             return None
         return [t_conj(t) for t in x0]
     xs = [prog_sym(q, fl, pw) for q in p.args if isinstance(q, Prog)]
@@ -269,11 +291,24 @@ def prog_sym(
 
 
 def cert_check(
-    fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], p: Prog, r: Sequence[ATm]
+    fl: Sequence[int],
+    pw: Sequence[tuple[Y.DMon, Y.DMon]],
+    p: Prog,
+    r: Sequence[ATm],
+    ctx: Z.Ctx | None = None,
+    rounds: int = 1,
 ) -> bool:
-    """``certCheck``."""
+    """``certCheck``; with a context, the program's expression passed under it, and with two
+    rounds the normal form passed and normalised again."""
     e = prog_sym(p, fl, pw)
-    return e is not None and not Z.nf_a(fl, pw, e + Z.ax_neg(r))
+    if e is None:
+        return False
+    if ctx is not None:
+        e = Z.x_pass(ctx, e)
+    nf = Z.nf_a(fl, pw, e + Z.ax_neg(r))
+    if nf and ctx is not None and rounds == 2:
+        nf = Z.nf_a(fl, pw, Z.x_pass(ctx, nf))
+    return not nf
 
 
 # Lean text
@@ -354,6 +389,8 @@ class Text:
             )
         elif p.kind == "ten":
             text = f".ten {p.args[0]} {self.prog(p.args[1], False)} {self.prog(p.args[2], False)}"
+        elif p.kind == "sum":
+            text = f".sum {self.dm(p.args[0])} {p.args[1]} {self.prog(p.args[2], False)}"
         else:
             text = f".{p.kind} {self.prog(p.args[0], False)} {self.prog(p.args[1], False)}"
         return text if top else f"({text})"
@@ -378,6 +415,10 @@ class Vars:
     pw: list[tuple[Y.DMon, Y.DMon]] = field(default_factory=list)
     powers: dict[sympy.Symbol, tuple[sympy.Expr, sympy.Symbol]] = field(default_factory=dict)
     widths: list[sympy.Symbol] = field(default_factory=list)
+    loops: list[sympy.Symbol] = field(default_factory=list)
+    divs: list[tuple[sympy.Expr, sympy.Expr]] = field(default_factory=list)
+    default: sympy.Expr | None = None
+    catoms: list[sympy.Symbol] = field(default_factory=list)
     funcs: list[str] = field(default_factory=list)
     needs_width: bool = False
     next_bound: int = BV
@@ -421,10 +462,13 @@ class Vars:
         for a, (b, m) in self.powers.items():
             if b == base and m == n:
                 return a
-        a = sympy.Symbol(f"{base}^{n}", positive=True)
+        a = sympy.Symbol(
+            f"{base}^{n}" if isinstance(n, sympy.Symbol) else f"{base}^({n})", positive=True
+        )
         self.powers[a] = (base, n)
-        if n not in self.widths:
-            self.widths.append(n)
+        for w in sorted(sympy.sympify(n).free_symbols, key=str):
+            if w not in self.widths:
+                self.widths.append(w)
         self.dim(a)
         self.pw.append((self.dmon(base), self.dmon(a)))
         return a
@@ -448,9 +492,12 @@ class Vars:
                 if p.degree() != 1 or not all(x.is_Integer for x in p.all_coeffs()):
                     raise CertifyError(f"the size {e}")
                 a, b = (int(x) for x in p.all_coeffs())
-                if a < 0 or b < 0:
+                if a < 1:
                     raise CertifyError(f"the size {e}")
-                out *= self.power(base, n) ** a * base**b
+                if b < 0:
+                    out *= self.power(base, a * n + b)
+                else:
+                    out *= self.power(base, n) ** a * base**b
             else:
                 out *= f
         if isinstance(c, sympy.Integer) and int(c) > 1:
@@ -470,7 +517,15 @@ class Vars:
             return self.ranges[self.ids[e]]
         if ctx is not None:
             return ctx
+        if self.default is not None:
+            return self.default
         raise CertifyError(f"no range is known for the atom argument {e}")
+
+    def known_range(self, e: sympy.Expr) -> sympy.Expr | None:
+        """The range of an index variable that has one."""
+        if isinstance(e, sympy.Symbol) and e in self.ids and self.ids[e] in self.ranges:
+            return self.ranges[self.ids[e]]
+        return None
 
     def atom(
         self,
@@ -494,6 +549,20 @@ class Vars:
         self.atoms.append(a)
         return a[0]
 
+    def quotients(self, e: sympy.Expr) -> sympy.Expr:
+        """``e`` with each ``D2 / D1`` of an assumed divisibility written as a quotient atom's
+        variable."""
+        for d2, d1 in self.divs:
+            q = sympy.expand(d2 / d1)
+            if not e.has(d1):
+                continue
+            z = sympy.Dummy("quo", integer=True)
+            e2 = sympy.expand(e).subs(q, z)
+            if e2.has(z) and not sympy.fraction(sympy.together(e2))[1].has(d1):
+                self.ids[z] = self.atom(12, [], [d2, d1], [])
+                e = e2
+        return e
+
     def repunits(self, e: sympy.Expr) -> sympy.Expr:
         """``e`` with each ``(d^k - 1)/(d - 1)`` written as a repunit atom's variable."""
         e = sympy.sympify(e)
@@ -501,7 +570,7 @@ class Vars:
         e = e.xreplace(mods)
         for p in sorted(e.atoms(sympy.Pow), key=str):
             b, k = p.base, p.exp
-            if not (k.free_symbols and b in self.dsyms):
+            if not (k.free_symbols and b in self.dsyms) or k.free_symbols & set(self.loops):
                 continue
             r = sympy.Dummy("rep", integer=True)
             e2 = sympy.cancel(sympy.together(e.subs(p, r * (b - 1) + 1)))
@@ -515,6 +584,7 @@ class Vars:
         """An integer polynomial in index variables and atoms; ``ctx`` the modulus it is read
         under (a register's levels or a root of unity's order)."""
         p: Y.IPoly = ()
+        e = self.quotients(sympy.sympify(e))
         for term in sympy.Add.make_args(sympy.expand(self.repunits(e))):
             c, rest = term.as_coeff_Mul()
             if not c.is_Integer:
@@ -533,8 +603,14 @@ class Vars:
                     if base == 2 and isinstance(k, sympy.Symbol):
                         mon.append(self.atom(7, [], [], [(k, sympy.Integer(0))]))
                         continue
+                    if k in self.loops:
+                        mon.append(self.atom(7, [], [base], [(k, sympy.Integer(0))]))
+                        continue
                 if not (k.is_Integer and int(k) > 0):
                     raise CertifyError(f"the index expression {e} is not a polynomial")
+                if isinstance(base, sympy.Symbol) and base in self.dsyms:
+                    mon += [self.atom(8, [], [base], [])] * int(k)
+                    continue
                 if isinstance(base, sympy.Symbol):
                     mon += [self.var(base)] * int(k)
                     continue
@@ -560,16 +636,25 @@ class Vars:
         from diracula import pathsum as P
 
         two = ctx is not None and sympy.expand(ctx - 2) == 0
+        digit = self.digit_atom(f, ctx)
+        if digit is not None:
+            return digit
         if isinstance(f, sympy.Mod):
             v, m = f.args
             if ctx is not None and sympy.expand(m - ctx) == 0:
                 return self.ipoly(v, ctx)
+            big = self.less_one(m)
+            if big is not None:
+                return Y.ip_v(
+                    self.atom(13, [], [big], [(self.wrap_range(v, big), sympy.Integer(0))])
+                )
             return Y.ip_v(self.atom(2, [], [], [(v, m)]))
         if isinstance(f, P.xor):
             a, b = f.args
             if two:
                 return self.ipoly(a + b, ctx)
             ma = self.range_of(a, ctx)
+            a, b = self.bit_wrap(a), self.bit_wrap(b)
             return Y.ip_v(self.atom(1, [], [], [(a, ma), (b, self.range_of(b, ma))]))
         if isinstance(f, P.bit):
             x, j = f.args
@@ -582,13 +667,25 @@ class Vars:
         if isinstance(f, (P.bitdot, P.ddot)):
             a, b = f.args[0], f.args[1]
             d = sympy.Integer(2) if isinstance(f, P.bitdot) else f.args[2]
-            n = self.range_of(a, None) if isinstance(a, sympy.Symbol) else self.range_of(b, ctx)
+            n = self.known_range(a) or self.known_range(b) or self.default
+            if n is None:
+                n = self.range_of(a, None) if isinstance(a, sympy.Symbol) else self.range_of(b, ctx)
             return Y.ip_v(self.atom(0, [], [d, n], [(a, n), (b, n)]))
         if isinstance(f, (P.pop, P.dsum)):
             v = f.args[0]
             d = sympy.Integer(2) if isinstance(f, P.pop) else f.args[1]
             n = self.range_of(v, ctx)
             return Y.ip_v(self.atom(6, [], [d, n], [(v, n)]))
+        if isinstance(f, sympy.Piecewise):
+            raise CertifyError(f"the piecewise value {f}")
+        body = getattr(type(f), "_body", None)
+        if isinstance(f, sympy.Function) and body is not None:
+            unfolded = body.xreplace(dict(zip(type(f)._params, f.args, strict=True)))
+            saved = (list(self.atoms), self.next_atom, list(self.funcs))
+            try:
+                return self.ipoly(unfolded, ctx)
+            except CertifyError:
+                self.atoms, self.next_atom, self.funcs = saved
         if isinstance(f, sympy.Function):
             name = type(f).__name__
             if name not in self.funcs:
@@ -596,6 +693,90 @@ class Vars:
             args = [(a, self.range_of(a, ctx)) for a in f.args]
             return Y.ip_v(self.atom(100 + self.funcs.index(name), [], [], args))
         raise CertifyError(f"the index expression {f}")
+
+    def less_one(self, m: sympy.Expr) -> sympy.Expr | None:
+        """``N`` when ``m = N - 1`` for a dimension monomial ``N`` that is not constant."""
+        big = sympy.expand(m + 1)
+        if big.is_Integer or not big.free_symbols:
+            return None
+        try:
+            dm = self.dmon(big)
+        except CertifyError:
+            return None
+        return big if not Y.dm_const(dm) else None
+
+    def wrap_range(self, e: sympy.Expr, big: sympy.Expr) -> sympy.Expr:
+        """``e`` with each index variable of range ``big`` read modulo ``big``."""
+        sub = {
+            v: sympy.Mod(v, big, evaluate=False)
+            for v in sympy.sympify(e).free_symbols
+            if isinstance(v, sympy.Symbol)
+            and v in self.ids
+            and self.ids[v] in self.ranges
+            and sympy.expand(self.ranges[self.ids[v]] - big) == 0
+        }
+        return sympy.sympify(e).xreplace(sub)
+
+    def bit_wrap(self, e: sympy.Expr) -> sympy.Expr:
+        """``e`` with each index of two levels that multiplies another factor read as itself
+        modulo 2."""
+        e = sympy.expand(e)
+        bits = set()
+        for term in sympy.Add.make_args(e):
+            fs = [f for f in sympy.Mul.make_args(term) if not f.is_Number]
+            if len(fs) >= 2:
+                bits |= {
+                    f
+                    for f in fs
+                    if isinstance(f, sympy.Symbol)
+                    and f in self.ids
+                    and sympy.sympify(self.ranges.get(self.ids[f], 0)) == 2
+                }
+        return e.xreplace({f: sympy.Mod(f, 2, evaluate=False) for f in bits})
+
+    def loop_power(self, e: sympy.Expr) -> tuple[sympy.Expr, sympy.Symbol] | None:
+        """``(d, j)`` when ``e`` is ``d^j`` for a loop variable ``j`` and a dimension or
+        integer ``d``."""
+        if (
+            isinstance(e, sympy.Pow)
+            and e.exp in self.loops
+            and (e.base.is_Integer or e.base in self.dsyms)
+        ):
+            return e.base, cast(sympy.Symbol, e.exp)
+        return None
+
+    def digit_atom(self, f: sympy.Expr, ctx: sympy.Expr | None) -> Y.IPoly | None:
+        """``floor(x/d^j) % d``, ``x % d^j`` and ``floor(x/d^j)`` for a loop variable ``j`` as
+        the atoms digit, low digits and high digits."""
+        z = sympy.Integer(0)
+        if isinstance(f, sympy.Mod):
+            u, m = f.args
+            lp = self.loop_power(m)
+            if lp is not None:
+                return Y.ip_v(self.atom(10, [], [lp[0]], [(u, self.range_of(u, ctx)), (lp[1], z)]))
+            if isinstance(u, sympy.floor):
+                q = self.high_parts(u.args[0])
+                if q is not None and sympy.expand(q[1] - m) == 0:
+                    x, d, j = q
+                    return Y.ip_v(self.atom(9, [], [d], [(x, self.range_of(x, ctx)), (j, z)]))
+        if isinstance(f, sympy.floor):
+            q = self.high_parts(f.args[0])
+            if q is not None:
+                x, d, j = q
+                return Y.ip_v(self.atom(11, [], [d], [(x, self.range_of(x, ctx)), (j, z)]))
+        return None
+
+    def high_parts(self, w: sympy.Expr) -> tuple[sympy.Expr, sympy.Expr, sympy.Symbol] | None:
+        """``(x, d, j)`` when ``w`` is ``x / d^j`` for a loop variable ``j``."""
+        num, den = sympy.fraction(sympy.together(w))
+        lp = self.loop_power(den)
+        if lp is None:
+            for f in sympy.Mul.make_args(w):
+                b, k = f.as_base_exp()
+                if (-k) in self.loops and (b.is_Integer or b in self.dsyms):
+                    return sympy.expand(w * b ** (-k)), b, cast(sympy.Symbol, -k)
+            return None
+        return num, lp[0], lp[1]
 
     def phase(self, r: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac]]:
         """``e^(2 pi i r)`` as a root of unity of a dimension monomial."""
@@ -613,6 +794,12 @@ class Vars:
         poly = self.ipoly(num, den)
         if dm == (1, ()):
             return Y.of_q(1), []
+        if Y.dm_const(dm):
+            c0 = next((c for m, c in poly if m == ()), 0)
+            if c0:
+                poly = Y.ip_sub(poly, Y.ip_c(c0))
+                ex = Y.ex_q(Fraction(c0, dm[0]))
+                return ex, [(dm, poly)] if poly else []
         return Y.of_q(1), [(dm, poly)]
 
     def amp(self, amp: sympy.Expr) -> list[tuple[Y.CMon, list[Y.Fac], list[Y.Fac]]]:
@@ -622,16 +809,26 @@ class Vars:
         for term in sympy.Add.make_args(expanded):
             if term == 0:
                 continue
-            cm, dels, phs = Y.of_q(1), [], []
-            for f in sympy.Mul.make_args(term):
-                if isinstance(f, sympy.KroneckerDelta):
-                    dels.append(self.kronecker(f))
-                    continue
-                c2, p2 = self.factor(f)
-                cm = Y.cm_mul(cm, c2)
-                phs += p2
-            out.append((cm, dels, phs))
+            try:
+                out.append(self.amp_term(term))
+            except CertifyError:
+                simpler = sympy.expand(sympy.radsimp(term), log=False, power_exp=False)
+                if sympy.expand(simpler - term) == 0 and simpler == term:
+                    raise
+                out += self.amp(simpler)
         return out
+
+    def amp_term(self, term: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac], list[Y.Fac]]:
+        """One product of an amplitude: a coefficient, deltas and roots of unity."""
+        cm, dels, phs = Y.of_q(1), [], []
+        for f in sympy.Mul.make_args(term):
+            if isinstance(f, sympy.KroneckerDelta):
+                dels.append(self.kronecker(f))
+                continue
+            c2, p2 = self.factor(f)
+            cm = Y.cm_mul(cm, c2)
+            phs += p2
+        return cm, dels, phs
 
     def kronecker(self, f: sympy.KroneckerDelta) -> Y.Fac:
         """``[a = b]`` as a delta modulo the range of an index on one side, the other side a
@@ -640,10 +837,14 @@ class Vars:
         for x, y in ((a, b), (b, a)):
             if isinstance(x, sympy.Symbol) and x in self.ids and self.ids[x] in self.ranges:
                 m = self.ranges[self.ids[x]]
-                ok = (y.is_Integer and 0 <= int(y) <= 1) or (
-                    isinstance(y, sympy.Symbol)
-                    and y in self.ids
-                    and self.ranges.get(self.ids[y]) == m
+                ok = (
+                    (y.is_Integer and 0 <= int(y) <= 1)
+                    or (y.is_Integer and m.is_Integer and 0 <= int(y) < int(m))
+                    or (
+                        isinstance(y, sympy.Symbol)
+                        and y in self.ids
+                        and self.ranges.get(self.ids[y]) == m
+                    )
                 )
                 if ok:
                     if y.is_Integer and int(y) == 1:
@@ -652,6 +853,37 @@ class Vars:
         raise CertifyError(f"the delta {f}")
 
     def factor(self, f: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac]]:
+        cm, phs = self.factor_raw(f)
+        return prime_radicals(cm), phs
+
+    def coefficient(self, s: sympy.Basic) -> int | None:
+        """The coefficient atom of a complex parameter ``s``: ``2 k`` for the ``k``-th, its
+        conjugate ``2 k + 1``."""
+        if not isinstance(s, sympy.Symbol) or s in self.dsyms or s in self.widths:
+            return None
+        if s.is_integer and (isinstance(s, sympy.Dummy) or s in self.ids or s in self.loops):
+            return None
+        if s not in self.catoms:
+            self.catoms.append(s)
+        return 2 * self.catoms.index(s)
+
+    def factor_raw(self, f: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac]]:
+        base, k = f.as_base_exp()
+        if k.is_Integer:
+            j = self.coefficient(base)
+            if j is not None:
+                return Y.atom_p(j, int(k)), []
+            if isinstance(base, sympy.conjugate):
+                j = self.coefficient(base.args[0])
+                if j is not None:
+                    return Y.atom_p(j + 1, int(k)), []
+            if isinstance(base, sympy.Abs) and int(k) % 2 == 0:
+                j = self.coefficient(base.args[0])
+                if j is not None:
+                    return Y.cm_mul(Y.atom_p(j, int(k) // 2), Y.atom_p(j + 1, int(k) // 2)), []
+        return self.factor_core(f)
+
+    def factor_core(self, f: sympy.Expr) -> tuple[Y.CMon, list[Y.Fac]]:
         if f.is_Rational:
             return Y.of_q(Fraction(int(f.p), int(f.q))), []
         if f == sympy.I:
@@ -680,6 +912,32 @@ class Vars:
         raise CertifyError(f"the amplitude factor {f}")
 
 
+def exp_text(n: sympy.Expr) -> str:
+    """A width exponent ``a n + b`` as Lean text over ``ℕ``."""
+    if isinstance(n, sympy.Symbol):
+        return str(n.name)
+    (w,) = sympy.sympify(n).free_symbols
+    a, b = (int(x) for x in sympy.Poly(n, w).all_coeffs())
+    head = w.name if a == 1 else f"{a} * {w.name}"
+    return f"({head} - {-b})" if b < 0 else f"({head} + {b})"
+
+
+def prime_radicals(cm: Y.CMon) -> Y.CMon:
+    """``cm`` with each constant radicand written as distinct primes, squares moved into the
+    rational factor."""
+    if not cm[3]:
+        return cm
+    q = cm[0]
+    rc: tuple[int, ...] = ()
+    for c in cm[3]:
+        for p, e in sympy.factorint(c).items():
+            q *= int(p) ** (e // 2)
+            if e % 2:
+                k, rc = Y.rc_ins(int(p), rc)
+                q *= k
+    return (q, cm[1], cm[2], rc, cm[4], cm[5])
+
+
 # path sums read from syntax trees
 
 
@@ -698,6 +956,23 @@ class Ket:
 def _tensor(a: Ket, b: Ket) -> Ket:
     terms = tuple((x[0] * y[0], x[1] + y[1], x[2] + y[2]) for x in a.terms for y in b.terms)
     return Ket(a.widths + b.widths, a.dims + b.dims, terms)
+
+
+def _merge(k: Ket) -> Ket | None:
+    """``k`` with its registers, of one dimension, joined into one big-endian register."""
+    if len(k.widths) <= 1:
+        return k
+    if any(w is None for w in k.widths) or any(d is None for d in k.dims):
+        return None
+    d = k.dims[0]
+    if any(sympy.expand(x - d) != 0 for x in k.dims):  # type: ignore[operator]
+        return None
+    shifts = [sympy.Add(*k.widths[i + 1 :]) for i in range(len(k.widths))]
+    terms = tuple(
+        (t[0], t[1], (sympy.Add(*(v * d**sh for v, sh in zip(t[2], shifts, strict=True))),))
+        for t in k.terms
+    )
+    return Ket((sympy.Add(*k.widths),), (d,), terms)
 
 
 def _scale(c: sympy.Expr, k: Ket) -> Ket:
@@ -767,7 +1042,9 @@ class Reader:
             s = sympy.Dummy(node.var, integer=True)
             body = self.eval(node.body, {**loc, node.var: Slot(s, size=hi)})
             if not isinstance(body, Ket):
-                raise CertifyError("a scalar sum")
+                if not (hi.is_Integer and int(hi) <= UNROLL):
+                    raise CertifyError("a scalar sum over a symbolic range")
+                return sympy.Add(*(body.xreplace({s: sympy.Integer(j)}) for j in range(int(hi))))
             return Ket(
                 body.widths, body.dims, tuple((t[0], ((s, hi),) + t[1], t[2]) for t in body.terms)
             )
@@ -775,6 +1052,11 @@ class Reader:
             if node.bra:
                 raise CertifyError("a bra inside a state")
             return self.ket(node, loc)
+        if isinstance(node, L.VectorNode):
+            amps = [self.scalar(e, loc) for e in node.items]
+            w, d = L._matrix_layout(sympy.Integer(len(amps)))
+            terms = tuple((a, (), (sympy.Integer(k),)) for k, a in enumerate(amps) if a != 0)
+            return Ket((w,), (d,), terms or ((sympy.Integer(0), (), (sympy.Integer(0),)),))
         if isinstance(node, L.Juxt) or (isinstance(node, L.Bin) and node.op in ("@", "*")):
             a, b = self.eval(node.left, loc), self.eval(node.right, loc)
             if isinstance(a, Ket) and isinstance(b, Ket):
@@ -789,6 +1071,11 @@ class Reader:
         if isinstance(node, L.Bin):
             a, b = self.eval(node.left, loc), self.eval(node.right, loc)
             if node.op in ("+", "-") and isinstance(a, Ket) and isinstance(b, Ket):
+                if a.widths != b.widths or a.dims != b.dims:
+                    ma, mb = _merge(a), _merge(b)
+                    if ma is None or mb is None:
+                        raise CertifyError("a sum of states of different layouts")
+                    a, b = ma, mb
                 if a.widths != b.widths or a.dims != b.dims:
                     raise CertifyError("a sum of states of different layouts")
                 if node.op == "-":
@@ -814,12 +1101,16 @@ class Reader:
         raise CertifyError(f"the expression {type(node).__name__}")
 
     def power(self, a: Ket, n: sympy.Expr) -> Ket:
-        if len(a.widths) != 1 or len(a.terms) != 1 or a.terms[0][1] or a.widths[0] != 1:
+        if len(a.widths) != 1 or len(a.terms) != 1 or a.terms[0][1] or a.widths[0] not in (1, None):
             raise CertifyError("a tensor power of a state other than one basis qudit")
+        a = Ket((sympy.Integer(1),), a.dims, a.terms)
         amp, _, (v,) = a.terms[0]
-        if v != 0 or amp != 1:
-            raise CertifyError("a tensor power of a basis state other than |0>")
-        return Ket((n,), a.dims, ((sympy.Integer(1), (), (sympy.Integer(0),)),))
+        if amp != 1:
+            raise CertifyError("a tensor power of a scaled basis state")
+        if v == 0:
+            return Ket((n,), a.dims, ((sympy.Integer(1), (), (sympy.Integer(0),)),))
+        d = a.dims[0] if a.dims[0] is not None else sympy.Integer(2)
+        return Ket((n,), a.dims, ((sympy.Integer(1), (), (v * (d**n - 1) / (d - 1),)),))
 
     def ket(self, node: object, loc: Mapping[str, Slot]) -> Ket:
         from diracula import lang as L
@@ -863,8 +1154,6 @@ class Reader:
                 width = sympy.Integer(1)
         elif explicit:
             width = sympy.Integer(1)
-        if width is None and dim is None and value.is_Integer:
-            width = sympy.Integer(1)
         return Ket((width,), (dim,), ((sympy.Integer(1), (), (value,)),))
 
 
@@ -895,23 +1184,123 @@ def term_atoms(vs: Vars, facs: Sequence[Y.Fac]) -> tuple[Atom, ...]:
     return tuple(a for a in vs.atoms if a[0] in need)
 
 
+UNROLL = 4096
+"""The largest number of terms a concrete sum is written out as."""
+
+
+def unrolled(vs: Vars, terms: Sequence[Any]) -> list[Any]:
+    """The terms, each whose amplitude is outside the amplitude grammar and sums over concrete
+    ranges written out term by term."""
+    import copy
+    import itertools
+
+    out = []
+    for amp, sums, kets in terms:
+        probe = copy.deepcopy(vs)
+        try:
+            for s, n in sums:
+                probe.bound(s, n)
+            probe.amp(amp)
+            out.append((amp, sums, kets))
+            continue
+        except CertifyError:
+            pass
+        small = [(s, n) for s, n in sums if n.is_Integer and int(n) <= UNROLL and amp.has(s)]
+        if not small or sympy.prod([n for _, n in small]) > UNROLL:
+            out.append((amp, sums, kets))
+            continue
+        keep = tuple(p for p in sums if p not in small)
+        for vals in itertools.product(*(range(int(n)) for _, n in small)):
+            sub = {s: sympy.Integer(v) for (s, _), v in zip(small, vals, strict=True)}
+            out.append(
+                (amp.xreplace(sub), keep, tuple(sympy.sympify(x).xreplace(sub) for x in kets))
+            )
+    return out
+
+
 def ket_terms(vs: Vars, k: Ket) -> list[ATm]:
     """``Σ amp Π_i [L_i ∣ o_i - v_i]``, output register ``i`` at variable ``i``."""
     lexprs = [d**w for w, d in zip(k.widths, k.dims, strict=True)]
     levels = [vs.dmon(x) for x in lexprs]
     for i, x in enumerate(lexprs):
         vs.ranges[i] = x
+    saved = vs.default
+    vs.default = lexprs[0] if len(lexprs) == 1 else None
+    try:
+        return ket_terms_core(vs, k, lexprs, levels)
+    finally:
+        vs.default = saved
+
+
+def unfold_user(v: sympy.Expr) -> sympy.Expr:
+    """``v`` with each user function whose body is a case split replaced by that body."""
+    v = sympy.sympify(v)
+    body = getattr(type(v), "_body", None)
+    if isinstance(v, sympy.Function) and body is not None:
+        u = body.xreplace(dict(zip(type(v)._params, v.args, strict=True)))
+        if isinstance(u, sympy.Piecewise):
+            return u
+    return v
+
+
+def case_split(vs: Vars, k: Any, lx: Any) -> tuple[Any, Any, Any] | None:
+    """``(A, B, y)`` of a ket ``ifelse(y < L - 1, A, B)`` with ``y`` reduced modulo ``L``."""
+    v = unfold_user(k)
+    if not isinstance(v, sympy.Piecewise) or len(v.args) != 2 or v.args[1][1] != sympy.true:
+        return None
+    (a, cond), (b, _) = v.args
+    if not isinstance(cond, (sympy.StrictLessThan, sympy.StrictGreaterThan)):
+        return None
+    y = sympy.expand(lx - 1 - (cond.gts - cond.lts))
+    reduced = (isinstance(y, sympy.Mod) and sympy.expand(y.args[1] - lx) == 0) or (
+        vs.known_range(y) is not None and sympy.expand(vs.known_range(y) - lx) == 0
+    )
+    return (a, b, y) if reduced else None
+
+
+def pieces(
+    vs: Vars, kets: Sequence[Any], lexprs: Sequence[Any]
+) -> list[tuple[int, tuple[Any, ...], list[Y.Fac]]]:
+    """The kets with each case split ``ifelse(y < L - 1, A, B)`` on a register of ``L`` levels
+    written as ``A - [L ∣ y + 1] A + [L ∣ y + 1] B``: sign, kets and the extra deltas; a user
+    function of one argument is read on its argument modulo ``L``."""
+    out: list[tuple[int, tuple[Any, ...], list[Y.Fac]]] = [(1, tuple(kets), [])]
+    for i, lx in enumerate(lexprs):
+        nxt = []
+        for sg, ks, extra in out:
+            k0 = sympy.sympify(ks[i])
+            if not isinstance(unfold_user(k0), sympy.Piecewise):
+                nxt.append((sg, ks, extra))
+                continue
+            c = case_split(vs, k0, lx)
+            if c is None and not isinstance(k0, sympy.Piecewise) and len(k0.args) == 1:
+                c = case_split(vs, k0.func(sympy.Mod(k0.args[0], lx)), lx)
+            if c is None:
+                raise CertifyError(f"the piecewise value {unfold_user(k0)}")
+            a, b, y = c
+            dc = (vs.dmon(lx), vs.ipoly(y + 1))
+            ka = ks[:i] + (a,) + ks[i + 1 :]
+            kb = ks[:i] + (b,) + ks[i + 1 :]
+            nxt += [(sg, ka, extra), (-sg, ka, extra + [dc]), (sg, kb, extra + [dc])]
+        out = nxt
+    return out
+
+
+def ket_terms_core(vs: Vars, k: Ket, lexprs: list[Any], levels: list[Y.DMon]) -> list[ATm]:
+    """``ket_terms`` with the registers' levels found."""
     out: list[ATm] = []
-    for amp, sums, kets in k.terms:
-        bound = tuple((vs.bound(s, n), vs.dmon(n)) for s, n in sums)
-        dels = []
-        for i, (v, lv, lx) in enumerate(zip(kets, levels, lexprs, strict=True)):
-            if isinstance(v, sympy.Mod) and sympy.expand(v.args[1] - lx) == 0:
-                v = v.args[0]
-            dels.append((lv, Y.ip_sub(Y.ip_v(i), vs.ipoly(v, lx))))
-        for cm, adels, phs in vs.amp(amp):
-            facs = dels + adels + phs
-            out.append((cm, bound, term_atoms(vs, facs), tuple(dels + adels), tuple(phs)))
+    for amp0, sums, kets0 in unrolled(vs, k.terms):
+        for sg, kets, extra in pieces(vs, kets0, lexprs):
+            amp = amp0 if sg == 1 else -amp0
+            bound = tuple((vs.bound(s, n), vs.dmon(n)) for s, n in sums)
+            dels = list(extra)
+            for i, (v, lv, lx) in enumerate(zip(kets, levels, lexprs, strict=True)):
+                if isinstance(v, sympy.Mod) and sympy.expand(v.args[1] - lx) == 0:
+                    v = v.args[0]
+                dels.append((lv, Y.ip_sub(Y.ip_v(i), vs.ipoly(v, lx))))
+            for cm, adels, phs in vs.amp(amp):
+                facs = dels + adels + phs
+                out.append((cm, bound, term_atoms(vs, facs), tuple(dels + adels), tuple(phs)))
     return out
 
 
@@ -985,14 +1374,57 @@ def lean_nat(e: sympy.Expr, names: Mapping[sympy.Symbol, str]) -> str:
     if isinstance(e, sympy.Add):
         return "(" + " + ".join(lean_nat(a, names) for a in e.args) + ")"
     if isinstance(e, sympy.Mul):
+        num, den = sympy.fraction(e)
+        if den != 1:
+            return f"({lean_nat(num, names)} / {lean_nat(den, names)})"
         return "(" + " * ".join(lean_nat(a, names) for a in e.args) + ")"
+    if isinstance(e, sympy.Pow) and e.exp.is_Integer and int(e.exp) > 0:
+        return f"({lean_nat(e.base, names)} ^ {int(e.exp)})"
+    if isinstance(e, sympy.Pow) and isinstance(e.exp, sympy.Symbol) and e.exp in names:
+        return f"({lean_nat(e.base, names)} ^ {names[e.exp]})"
     if isinstance(e, sympy.floor):
         num, den = sympy.fraction(sympy.together(e.args[0]))
-        if den.is_Integer:
-            return f"({lean_nat(sympy.expand(num), names)} / {int(den)})"
+        return f"({lean_nat(sympy.expand(num), names)} / {lean_nat(den, names)})"
     if isinstance(e, sympy.Mod) and e.args[1].is_Integer:
         return f"({lean_nat(e.args[0], names)} % {int(e.args[1])})"
     raise CertifyError(f"the outcome expression {e}")
+
+
+def lean_rat(e: sympy.Expr, names: Mapping[sympy.Symbol, str]) -> str:
+    """A rational expression over natural numbers and their floors as Lean text over ``ℚ``."""
+    e = sympy.sympify(e)
+    if e.is_Integer:
+        return f"({int(e)} : ℚ)"
+    if e.is_Rational:
+        return f"(({e.p} : ℚ) / {e.q})"
+    if isinstance(e, sympy.Add):
+        return "(" + " + ".join(lean_rat(a, names) for a in e.args) + ")"
+    if isinstance(e, sympy.Mul):
+        num, den = sympy.fraction(e)
+        if den != 1:
+            return f"({lean_rat(num, names)} / {lean_rat(den, names)})"
+        return "(" + " * ".join(lean_rat(a, names) for a in e.args) + ")"
+    return f"(({lean_nat(e, names)} : ℕ) : ℚ)"
+
+
+def true_div(e: sympy.Expr) -> bool:
+    """Whether ``e`` divides outside its floors."""
+    e = sympy.sympify(e)
+    e = e.xreplace({f: sympy.Dummy("f", integer=True) for f in e.atoms(sympy.floor)})
+    return bool(sympy.fraction(sympy.together(e))[1] != 1)
+
+
+def pos_c(t: ATm) -> bool:
+    """Whether a term is a coefficient alone whose value is a positive real (``posC``)."""
+    c = t[0]
+    return (
+        t[1:] == ((), (), (), ())
+        and c[1] == 0
+        and c[4] == ()
+        and c[5] == ()
+        and c[0] > 0
+        and all(x > 0 for x in c[3])
+    )
 
 
 DECIDES = "(by decide +kernel) (by decide +kernel) (by decide +kernel) (by decide +kernel)"
@@ -1057,8 +1489,16 @@ class Certifier:
         self.upto = 0
         self.assumptions: list[sympy.Basic] = []
         self.outcome_fn: Callable[[sympy.Expr], sympy.Expr] = lambda v: v
+        self.norms: Mapping[int, Sequence[sympy.Expr]] = {}
+        self.nrm_obls: list[tuple[Prog, list[Y.DMon], ATm, sympy.Expr]] = []
         self.vs = Vars()
         self.decls: list[tuple[str, Prog]] = []
+        self.wl_used: list[tuple[int, Y.DMon, Y.DMon]] = []
+        self.ctx_any = False
+        self.ctx_used = False
+        self.gate_layouts: dict[object, Layout] = {}
+        self.rounds = 1
+        self.nfs2: list[ATm | None] = []
         self.done: dict[object, Prog] = {}
         self.text = Text()
 
@@ -1101,6 +1541,8 @@ class Certifier:
             return "ket" if b == "ket" else a
         if isinstance(node, L.Bin) and node.op in ("@", "^@", "+", "-"):
             return self.kind(node.left)
+        if isinstance(node, L.Call) and node.name == "normalise" and len(node.args) == 1:
+            return self.kind(node.args[0])
         return "scalar"
 
     def named(self, node: object) -> bool:
@@ -1113,6 +1555,34 @@ class Certifier:
             return self.kind(node) == "op"
         children = [getattr(node, f) for f in ("left", "right", "arg", "body") if hasattr(node, f)]
         return any(self.named(c) for c in children)
+
+    def bra_only(self, node: object) -> bool:
+        """Whether ``node`` is a bra or a tensor product of bras."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Braket):
+            return node.bra
+        if isinstance(node, L.Bin) and node.op == "@":
+            return self.bra_only(node.left) and self.bra_only(node.right)
+        return False
+
+    def flip(self, node: object) -> object:
+        """The ket of a bra or of a tensor product of bras."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Braket):
+            return L.Braket(node.content, False, node.dim)
+        assert isinstance(node, L.Bin)
+        return L.Bin("@", self.flip(node.left), self.flip(node.right))
+
+    def has_bra(self, node: object) -> bool:
+        """Whether ``node`` contains a bra."""
+        from diracula import lang as L
+
+        if isinstance(node, L.Braket):
+            return node.bra
+        children = [getattr(node, f) for f in ("left", "right", "arg", "body") if hasattr(node, f)]
+        return any(self.has_bra(c) for c in children)
 
     def is_state(self, name: str) -> bool:
         return any(e.name == name for e in self.log[: self.upto])
@@ -1163,6 +1633,8 @@ class Certifier:
         from diracula import lang as L
 
         body, var_sym, lo, hi, invariant = ev.nodes
+        if var_sym not in self.vs.loops:
+            self.vs.loops.append(cast(sympy.Symbol, var_sym))
         try:
             inv = invariant()  # type: ignore[operator]
         except Exception as exc:
@@ -1188,8 +1660,35 @@ class Certifier:
         lo_e, hi_e = sympy.sympify(lo), sympy.sympify(hi)
         j = self.vs.var(cast(sympy.Basic, var_sym))
         cnt = self.vs.count(sympy.expand(hi_e + 1 - lo_e))
-        inv_terms = state_terms(self.vs, cast(State, inv))
+        inv_terms = state_terms(self.vs, self.reduced_params(cast(State, inv), var_sym))
         return Prog("loop", (self.levels(lay), j, int(lo_e), cnt, step, init, inv_terms)), lay
+
+    def reduced_params(self, inv: State, j: Any) -> State:
+        """The invariant with each parameter in a case-split ket read modulo the register's
+        levels."""
+        from diracula import pathsum as P
+
+        if not any(isinstance(v, sympy.Piecewise) for t in inv.terms for v in t.kets):
+            return inv
+        terms = []
+        for t in inv.terms:
+            bound = {b.symbol for b in t.bound}
+            kets = []
+            for v, w, d in zip(t.kets, inv.widths, inv.dims, strict=True):
+                lx = cast(sympy.Expr, d) ** w
+                sub = {
+                    q: sympy.Mod(q, lx)
+                    for q in sympy.sympify(v).free_symbols
+                    if isinstance(q, sympy.Symbol)
+                    and q.is_integer
+                    and q not in bound
+                    and q != j
+                    and q not in self.vs.dsyms
+                    and q not in self.vs.widths
+                }
+                kets.append(sympy.sympify(v).xreplace(sub) if isinstance(v, sympy.Piecewise) else v)
+            terms.append(P.Term(t.amp, t.bound, tuple(kets)))
+        return P.State(inv.widths, tuple(terms), inv.bra, inv.dims)
 
     def previous(self, name: str, index: int) -> int:
         for k in range(index - 1, -1, -1):
@@ -1207,6 +1706,8 @@ class Certifier:
         k = self.reader.eval(node, {})
         if not isinstance(k, Ket):
             raise CertifyError("a scalar where a state is expected")
+        if want is not None and len(want[0]) == 1 and len(k.widths) > 1:
+            k = _merge(k) or k
         if want is not None and len(want[0]) == len(k.widths):
             k = fix_layout(k, *want)
         else:
@@ -1217,6 +1718,24 @@ class Certifier:
             )
         return Prog("leaf", (ket_terms(self.vs, k),)), (k.widths, k.dims)
 
+    def normalised(self, node: Any, want: Layout | None) -> tuple[Prog, Layout]:
+        """``normalise(s)`` as ``k s`` for ``k = 1/norm`` of the run, with the obligation
+        ``k² <s|s> = 1`` proved in the same file."""
+        norms: list[sympy.Expr] = []
+        for x in self.norms.get(id(node), []):
+            if not any(sympy.simplify(x - y) == 0 for y in norms):
+                norms.append(x)
+        if len(norms) != 1:
+            raise CertifyError("normalise of a state whose norm the run does not fix")
+        p, lay = self.expr(node.args[0], want)
+        kt = scalar_terms(self.vs, 1 / norms[0])
+        if len(kt) != 1 or not pos_c(kt[0]):
+            raise CertifyError(f"the norm {norms[0]}")
+        i = len(self.nrm_obls)
+        psi = self.declare(("nrm_s", i), f"nstate_{i}", f"the argument of normalise #{i}", p)
+        self.nrm_obls.append((psi, self.levels(lay), kt[0], norms[0]))
+        return Prog("mul", (Prog("leaf", ([kt[0]],)), psi)), lay
+
     def scalar_leaf(self, node: object) -> Prog:
         return Prog("leaf", (scalar_terms(self.vs, self.reader.scalar(node, {})),))
 
@@ -1224,12 +1743,12 @@ class Certifier:
         """A scalar-valued tree."""
         from diracula import lang as L
 
-        if not self.named(node):
+        if not self.named(node) and not self.has_bra(node):
             return self.scalar_leaf(node)
-        if isinstance(node, L.Juxt) and isinstance(node.left, L.Braket) and node.left.bra:
-            ket = L.Braket(node.left.content, False, node.left.dim)
-            pa, la = self.expr(ket)
+        if isinstance(node, L.Juxt) and self.kind(node.left) == "bra" and self.bra_only(node.left):
+            ket = self.flip(node.left)
             pb, lb = self.expr(node.right)
+            pa, la = self.expr(ket, lb)
             self.match(la, lb)
             return Prog("inn", (self.levels(la), pa, pb))
         if isinstance(node, L.Juxt) or (isinstance(node, L.Bin) and node.op == "*"):
@@ -1251,6 +1770,8 @@ class Certifier:
         """A state-valued tree."""
         from diracula import lang as L
 
+        if isinstance(node, L.Call) and node.name == "normalise" and len(node.args) == 1:
+            return self.normalised(node, want)
         if not self.named(node):
             return self.leaf(node, want)
         if isinstance(node, L.Braket) and not node.bra:
@@ -1266,16 +1787,14 @@ class Certifier:
                 if isinstance(node, L.Bin)
                 else ka == "scalar" and kb == "ket"
             ):
-                p, lay = self.expr(node.right)
-                return Prog("mul", (self.scalar_leaf(node.left), p)), lay
+                p, lay = self.expr(node.right, want)
+                return Prog("mul", (self.scalar_prog(node.left), p)), lay
             if ka == "ket" and kb == "scalar":
-                p, lay = self.expr(node.left)
-                s = (
-                    node.right
-                    if not (isinstance(node, L.Bin) and node.op == "/")
-                    else L.Bin("/", L.Num(sympy.Integer(1)), node.right)
-                )
-                return Prog("mul", (self.scalar_leaf(s), p)), lay
+                p, lay = self.expr(node.left, want)
+                if isinstance(node, L.Bin) and node.op == "/":
+                    s = L.Bin("/", L.Num(sympy.Integer(1)), node.right)
+                    return Prog("mul", (self.scalar_leaf(s), p)), lay
+                return Prog("mul", (self.scalar_prog(node.right), p)), lay
             if ka == "ket" and kb == "ket" and isinstance(node, L.Juxt):
                 return self.tensor(node.left, node.right)
             raise CertifyError(f"juxtaposing a {ka} and a {kb}")
@@ -1291,6 +1810,20 @@ class Certifier:
         if isinstance(node, L.Neg):
             p, lay = self.expr(node.arg, want)
             return Prog("mul", (MINUS, p)), lay
+        if isinstance(node, L.SumNode):
+            lo = self.reader.scalar(node.lo, {})
+            hi = self.reader.scalar(node.hi, {}) + (1 if node.inclusive else 0)
+            if lo != 0:
+                raise CertifyError("a sum that does not start at 0")
+            s = sympy.Dummy(node.var, integer=True)
+            x = self.vs.bound(s, hi)
+            saved = self.reader.values
+            self.reader.values = {**saved, node.var: s}
+            try:
+                p, lay = self.expr(node.body, want)
+            finally:
+                self.reader.values = saved
+            return Prog("sum", (self.vs.dmon(hi), x, p)), lay
         raise CertifyError(f"the state expression {type(node).__name__}")
 
     def tensor(self, a: object, b: object) -> tuple[Prog, Layout]:
@@ -1317,9 +1850,32 @@ class Certifier:
             if ka == "scalar" and kb == "op":
                 p, out = self.op(node.right, lay)
                 return Prog("mul", (self.scalar_leaf(node.left), p)), out
+            if ka == "ket" and kb == "bra":
+                return self.outer(node.left, node.right, lay)
         if isinstance(node, L.Bin) and node.op == "^@":
             return self.power(node, lay)
+        if isinstance(node, L.Bin) and node.op in ("+", "-"):
+            p, out = self.op(node.left, lay)
+            q, out2 = self.op(node.right, lay)
+            self.match(out2, out)
+            if node.op == "-":
+                q = Prog("mul", (MINUS, q))
+            return Prog("add", (p, q)), out
+        if isinstance(node, L.Neg):
+            p, out = self.op(node.arg, lay)
+            return Prog("mul", (MINUS, p)), out
         raise CertifyError(f"the operator expression {type(node).__name__}")
+
+    def outer(self, ket: object, bra: object, lay: Layout) -> tuple[Prog, Layout]:
+        """``|a><b|`` as the kernel ``a(o) conj(b(in))``: ``b`` read on the input registers."""
+        from diracula import lang as L
+
+        if not (isinstance(bra, L.Braket) and bra.bra):
+            raise CertifyError("an outer product with a bra expression")
+        pa, la = self.expr(ket)
+        pb, lb = self.expr(L.Braket(bra.content, False, bra.dim), lay)
+        self.match(lb, lay)
+        return Prog("ten", (IN, pa, Prog("cnj", (pb,)))), la
 
     def power(self, node: object, lay: Layout) -> tuple[Prog, Layout]:
         """``U^@n`` on one register of width ``n``: the digit-wise kernel
@@ -1333,16 +1889,39 @@ class Certifier:
         if len(lay[0]) != 1:
             raise CertifyError("a tensor power applied to several registers")
         w, d = lay[0][0], lay[1][0]
+        tree = self.trees[g.id]
+        q, want = tree.slots[0]
         count = self.reader.scalar(node.right, {})
+        bind: dict[str, sympy.Expr] = {}
         if sympy.expand(count - w) != 0:
-            raise CertifyError(f"{g.id}^@{count} on a register of width {w}")
+            if not (isinstance(node.right, L.Name) and self.free_symbol(node.right.id)):
+                raise CertifyError(f"{g.id}^@{count} on a register of width {w}")
+            bind[node.right.id] = w
+        if want is not None and sympy.expand(self.reader.scalar(self.parse(want), {}) - d) != 0:
+            if not self.free_symbol(want):
+                raise CertifyError(f"{g.id}: |{q}>_{want} on a dimension-{d} register")
+            bind[want] = d
+        if bind:
+            saved = self.reader.values
+            self.reader.values = {**saved, **bind}
+            try:
+                return self.power_core(g, tree, q, lay, w, d, count, bind)
+            finally:
+                self.reader.values = saved
+        return self.power_core(g, tree, q, lay, w, d, count, bind)
+
+    def free_symbol(self, name: str) -> bool:
+        """Whether the variable ``name`` is a symbol without a value, bound per application."""
+        v = self.reader.values.get(name)
+        return isinstance(v, sympy.Symbol) and v.name == name
+
+    def power_core(
+        self, g: Any, tree: GateTree, q: str, lay: Layout, w: Any, d: Any, count: Any, bind: Any
+    ) -> tuple[Prog, Layout]:
+        """The digit-wise kernel of ``g^@count`` on the register ``lay``."""
         key = ("pow", g.id, lay)
         if key in self.done:
             return self.done[key], lay
-        tree = self.trees[g.id]
-        q, want = tree.slots[0]
-        if want is not None and sympy.expand(self.reader.scalar(self.parse(want), {}) - d) != 0:
-            raise CertifyError(f"{g.id}: |{q}>_{want} on a dimension-{d} register")
         x = sympy.Dummy(q, integer=True)
         o = sympy.Dummy("o", integer=True)
         self.vs.ids[x], self.vs.ids[o] = IN, 0
@@ -1444,8 +2023,10 @@ class Certifier:
         if name not in self.trees:
             raise CertifyError(f"{name} is not a gate")
         tree = self.trees[name]
-        if isinstance(tree.body, (L.MatrixNode, L.MatrixFor)):
+        if isinstance(tree.body, L.MatrixFor):
             raise CertifyError(f"the matrix gate {name}")
+        if isinstance(tree.body, L.MatrixNode):
+            return self.matrix_gate(name, tree, lay)
         if len(tree.slots) != len(lay[0]):
             raise CertifyError(f"{name} acts on {len(tree.slots)} register(s), got {len(lay[0])}")
         key = ("gate", name, lay)
@@ -1457,7 +2038,12 @@ class Certifier:
             self.vs.ids[s] = IN + i
             self.vs.ranges[IN + i] = d**w
             loc[q] = Slot(s, w, d)
-        k = self.reader.eval(tree.body, loc)
+        try:
+            k = self.reader.eval(tree.body, loc)
+        except CertifyError:
+            if not self.named(tree.body) and not self.has_bra(tree.body):
+                raise
+            return self.gate_prog(name, tree, lay, loc, key)
         if not isinstance(k, Ket):
             raise CertifyError(f"the body of {name} is not a ket")
         if len(k.widths) == len(lay[0]):
@@ -1473,10 +2059,54 @@ class Certifier:
         p = Prog("leaf", (ket_terms(self.vs, k),))
         return self.declare(key, f"gate_{_clean(name)}", f"gate {tree.source}", p), out
 
+    def gate_prog(
+        self, name: str, tree: GateTree, lay: Layout, loc: Mapping[str, Slot], key: object
+    ) -> tuple[Prog, Layout]:
+        """A gate whose body reads named states, its kernel built as a program with the pattern
+        variables on the input registers."""
+        if key in self.done:
+            return self.done[key], self.gate_layouts[key]
+        saved = self.reader.values
+        self.reader.values = {**saved, **{q: sl.symbol for q, sl in loc.items()}}
+        try:
+            p, out = self.expr(tree.body)
+        finally:
+            self.reader.values = saved
+        self.gate_layouts[key] = out
+        return self.declare(key, f"gate_{_clean(name)}", f"gate {tree.source}", p), out
+
+    def matrix_gate(self, name: str, tree: GateTree, lay: Layout) -> tuple[Prog, Layout]:
+        """A matrix gate on one register as the kernel ``Σ_{i,j} M_ij [o = i][in = j]``."""
+        if len(lay[0]) != 1:
+            raise CertifyError(f"the matrix gate {name} on several registers")
+        rows = [[self.reader.scalar(e, {}) for e in row] for row in tree.body.rows]  # type: ignore[attr-defined]
+        w, d = lay[0][0], lay[1][0]
+        if sympy.expand(d**w - len(rows)) != 0:
+            raise CertifyError(f"the matrix gate {name} on a register of {d**w} levels")
+        key = ("gate", name, lay)
+        if key in self.done:
+            return self.done[key], lay
+        s = sympy.Dummy("in", integer=True)
+        self.vs.ids[s] = IN
+        self.vs.ranges[IN] = d**w
+        terms = tuple(
+            (a * sympy.KroneckerDelta(s, j), (), (sympy.Integer(i),))
+            for i, row in enumerate(rows)
+            for j, a in enumerate(row)
+            if a != 0
+        )
+        k = Ket((w,), (d,), terms or ((sympy.Integer(0), (), (sympy.Integer(0),)),))
+        p = Prog("leaf", (ket_terms(self.vs, k),))
+        return self.declare(key, f"gate_{_clean(name)}", f"gate {name} = {tree.source}", p), lay
+
     # the theorem
 
     def setup(self, upto: int) -> None:
         self.upto = upto
+        self.vs.divs = []
+        for a in self.assumptions:
+            if isinstance(a, sympy.Eq) and a.rhs == 0 and isinstance(a.lhs, sympy.Mod):
+                self.vs.divs.append((a.lhs.args[0], a.lhs.args[1]))
         for ev in self.log[:upto]:
             if isinstance(ev.value, State):
                 for d in ev.value.dims:
@@ -1495,25 +2125,84 @@ class Certifier:
 
     def floors(self) -> list[int]:
         wide = self.vs.needs_width
-        return [(2 if wide else 0) if s in self.vs.powers else 2 for s in self.vs.dsyms]
+        return [
+            (2 if wide and isinstance(self.vs.powers[s][1], sympy.Symbol) else 0)
+            if s in self.vs.powers
+            else 2
+            for s in self.vs.dsyms
+        ]
+
+    def wl(self) -> list[tuple[int, Y.DMon, Y.DMon]]:
+        """The width links: ``(ν k, d, N)`` for each power ``N = d^n`` whose width ``n`` is the
+        parameter ``ν k`` (a loop count)."""
+        out = []
+        for a, (base, n) in self.vs.powers.items():
+            if isinstance(n, sympy.Symbol) and n.name in self.vs.params:
+                out.append(
+                    (PAR + self.vs.params.index(n.name), self.vs.dmon(base), self.vs.dmon(a))
+                )
+        return out
+
+    def dv(self) -> list[tuple[Y.DMon, Y.DMon]]:
+        """``(D1, D2)`` for each assumption ``D2 % D1 == 0`` between dimension monomials."""
+        out = []
+        for a, b in self.vs.divs:
+            try:
+                out.append((self.vs.dmon(b), self.vs.dmon(a)))
+            except CertifyError:
+                continue
+        return out
+
+    def ctx(self) -> Z.Ctx:
+        """The context of the closing pass: the width links and divisibilities."""
+        return ((), tuple(self.wl()), tuple(self.dv()))
 
     def check(self, p: Prog, rhs: Sequence[ATm]) -> list[str]:
         """The translation and normal-form declarations of a closing check."""
+        self.wl_used = []
+        self.ctx_used = False
         ok = cert_check(self.floors(), self.vs.pw, p, rhs)
         if not ok and self.vs.powers and not self.vs.needs_width:
             self.vs.needs_width = True
             ok = cert_check(self.floors(), self.vs.pw, p, rhs)
+        self.rounds = 1
+        if not ok and (self.wl() or self.dv()):
+            ok = cert_check(self.floors(), self.vs.pw, p, rhs, self.ctx())
+            if not ok:
+                ok = cert_check(self.floors(), self.vs.pw, p, rhs, self.ctx(), 2)
+                self.rounds = 2 if ok else 1
+            self.wl_used = self.wl() if ok else []
+            self.ctx_used = ok
+            self.ctx_any = self.ctx_any or ok
         if not ok:
             raise CertifyError("the normaliser does not close the difference")
         e = prog_sym(p, self.floors(), self.vs.pw)
         assert e is not None
-        ns = [Z.norm_a(self.floors(), self.vs.pw, Z.AROUNDS, t) for t in e + Z.ax_neg(rhs)]
+        fl, pw = self.floors(), self.vs.pw
+        e2 = Z.x_pass(self.ctx(), e) if self.ctx_used else e
+        ns = [Z.norm_a(fl, pw, Z.AROUNDS, t) for t in e2 + Z.ax_neg(rhs)]
+        self.nfs2 = []
+        if self.rounds == 2:
+            nf1 = Z.nf_a(fl, pw, e2 + Z.ax_neg(rhs))
+            self.nfs2 = [Z.norm_a(fl, pw, Z.AROUNDS, t) for t in Z.x_pass(self.ctx(), nf1)]
         self.sym, self.nfs = e, ns
         return []
 
     def hint_decls(self, k: str = "") -> list[str]:
         nfs = ",\n   ".join("none" if t is None else f"some {self.text.tm(t)}" for t in self.nfs)
+        second = []
+        if self.rounds == 2:
+            nfs2 = ",\n   ".join(
+                "none" if t is None else f"some {self.text.tm(t)}" for t in self.nfs2
+            )
+            second = [
+                (
+                    f"/-- The normal form of each term of the second round. -/\n"
+                    f"def NF2{k} : List (Option ATm) :=\n  [{nfs2}]\n"
+                )
+            ]
         return [
+            *second,
             (
                 f"/-- The program as one expression. -/\ndef SYM{k} : List ATm :=\n  "
                 f"{self.text.ex(self.sym)}\n"
@@ -1533,12 +2222,45 @@ class Certifier:
         ]
         return "\n".join(decls), self.lit_proof(p, f"R{k}", k)
 
+    def wl_hyps(self) -> list[tuple[int, str]]:
+        """``(ν k, n)`` for each width link the last check used."""
+        out: list[tuple[int, str]] = []
+        for v, _, _ in self.wl_used:
+            if (v, self.vs.params[v - PAR]) not in out:
+                out.append((v, self.vs.params[v - PAR]))
+        return out
+
+    def wl_intro(self) -> tuple[str, str]:
+        """The hypotheses ``ν k = n`` of the last check's width links and their names."""
+        hyps = self.wl_hyps()
+        return (
+            "".join(f"ν {v} = ({n} : ℤ) → " for v, n in hyps),
+            " ".join(f"h_ν{v}" for v, _ in hyps),
+        )
+
     def lit_proof(self, p: Prog, r: str, k: str) -> str:
+        if self.ctx_used:
+            _, names = self.wl_intro()
+            if self.rounds == 2:
+                return (
+                    f"fun ν {names} => certify_w2_c V hρ FL FLOK PW PWOK CTX {p.name} {r} SYM{k} "
+                    f"NF{k} NF2{k} {DECIDES} (by decide +kernel) ν (CTXOK ν ⟪ASM⟫ {names})"
+                )
+            return (
+                f"fun ν {names} => certify_w_c V hρ FL FLOK PW PWOK CTX {p.name} {r} SYM{k} "
+                f"NF{k} {DECIDES} ν (CTXOK ν ⟪ASM⟫ {names})"
+            )
         if counts(p):
             return f"certify_lit_c V hρ FL FLOK PW PWOK {p.name} {r} SYM{k} NF{k} " + DECIDES
         return f"certify_lit V hρ FL FLOK PW PWOK {p.name} {r} SYM{k} NF{k} " + DECIDES
 
     def lit_stmt(self, p: Prog, r: str) -> str:
+        if self.ctx_used:
+            hyps, _ = self.wl_intro()
+            return (
+                f"∀ ν : ℕ → ℤ, {hyps}(∀ c ∈ {p.name}.counts, 0 ≤ ipDen ν c) → "
+                f"{p.name}.sem V ν = axDen V ν {r}"
+            )
         if counts(p):
             return (
                 f"∀ ν : ℕ → ℤ, (∀ c ∈ {p.name}.counts, 0 ≤ ipDen ν c) → "
@@ -1566,6 +2288,200 @@ class Certifier:
             f"{self.script}_{_clean(name)}",
             self.lit_stmt(p, printed),
             self.lit_proof(p, printed, ""),
+            extra,
+            [],
+        )
+
+    def certify_expr(
+        self, label: str, node: object, values: Mapping[str, object], value: State
+    ) -> str:
+        """The Lean source certifying the printed value of the shown state expression
+        ``node``."""
+        self.setup(len(self.log))
+        for tree in self.trees.values():
+            for _, dim in tree.slots:
+                v = values.get(dim) if dim else None
+                if isinstance(v, sympy.Basic):
+                    for sym in v.free_symbols:
+                        if isinstance(sym, sympy.Symbol) and sym not in self.vs.widths:
+                            self.vs.dim(sym)
+        self.reader = Reader(self.parse, values, self.funcs)
+        lay = self.layout_of(value)
+        p0, got = self.expr(node, lay)
+        self.match(got, lay)
+        p = self.declare(("expr", label), "shown", f"show({label})", p0)
+        rhs = state_terms(self.vs, value)
+        self.check(p, rhs)
+        extra = [
+            (
+                f"/-- The printed value of {label}. -/\ndef printed : List ATm :=\n  "
+                f"{self.text.ex(rhs)}\n"
+            ),
+            *self.hint_decls(),
+        ]
+        return self.source(
+            label,
+            f"{self.script}_show_{_clean(label)}",
+            self.lit_stmt(p, "printed"),
+            self.lit_proof(p, "printed", ""),
+            extra,
+            [],
+        )
+
+    def certify_norm(
+        self, label: str, node: Any, values: Mapping[str, object], value: State, norm: sympy.Expr
+    ) -> str:
+        """The Lean source certifying ``normalise(s)``: ``k s`` is the printed value and
+        ``k² <s|s> = 1`` for the positive real ``k = 1/norm``."""
+        self.setup(len(self.log))
+        self.reader = Reader(self.parse, values, self.funcs)
+        lay = self.layout_of(value)
+        p0, got = self.expr(node.args[0], lay)
+        self.match(got, lay)
+        psi = self.declare(("expr", label), "state", f"the state normalised in {label}", p0)
+        kt = scalar_terms(self.vs, 1 / norm)
+        if len(kt) != 1 or not pos_c(kt[0]):
+            raise CertifyError(f"the norm {norm}")
+        kleaf = Prog("leaf", ([kt[0]],))
+        inn = self.declare(
+            ("nrm_in",), "inner", f"<s|s> of {label}", Prog("inn", (self.levels(lay), psi, psi))
+        )
+        sa = self.declare(("nrm_a",), "scaled", f"k s of {label}", Prog("mul", (kleaf, psi)))
+        da, pa = self.lit(sa, state_terms(self.vs, value), "_a", f"The printed value of {label}.")
+        if self.ctx_used or counts(sa):
+            raise CertifyError("normalise of a state with loops")
+        sb = self.declare(
+            ("nrm_b",),
+            "unit",
+            f"k² <s|s> of {label}",
+            Prog("mul", (Prog("mul", (kleaf, kleaf)), inn)),
+        )
+        db, pb = self.lit(sb, scalar_terms(self.vs, sympy.Integer(1)), "_b", "One.")
+        if self.ctx_used or counts(sb):
+            raise CertifyError("normalise of a state with loops")
+        kdecl = (
+            f"/-- The coefficient k = 1/({norm}). -/\ndef KT : ATm :=\n  {self.text.tm(kt[0])}\n"
+        )
+        stmt = (
+            f"∀ ν : ℕ → ℤ, axDen V ν R_a = "
+            f"((Real.sqrt ({inn.name}.sem V ν).re : ℝ) : ℂ)⁻¹ * {psi.name}.sem V ν"
+        )
+        proof = (
+            f"fun ν => nrm_cert V hρ _ {psi.name} R_a KT (by decide +kernel) ν "
+            f"(congrFun ({pa}) ν) (congrFun ({pb}) ν)"
+        )
+        return self.source(
+            label, f"{self.script}_show_{_clean(label)}", stmt, proof, [kdecl, da, db], []
+        )
+
+    def printed_op(self, v: Any, lay: Layout) -> Prog:
+        """A printed operator as a program: outer products of printed states, scaled sums and
+        identities."""
+        from diracula import pathsum as P
+
+        if isinstance(v, P.Outer):
+            ket = Prog("leaf", (state_terms(self.vs, v.ket),))
+            bra = Prog(
+                "leaf",
+                (state_terms(self.vs, P.State(v.bra.widths, v.bra.terms, False, v.bra.dims)),),
+            )
+            return Prog("ten", (IN, ket, bra))
+        if isinstance(v, P.Scaled):
+            return Prog(
+                "mul",
+                (Prog("leaf", (scalar_terms(self.vs, v.factor),)), self.printed_op(v.op, lay)),
+            )
+        if isinstance(v, P.OpSum):
+            out = self.printed_op(v.ops[0], lay)
+            for o in v.ops[1:]:
+                out = Prog("add", (out, self.printed_op(o, lay)))
+            return out
+        if isinstance(v, P.Identity):
+            return self.ident(lay)
+        raise CertifyError(f"the printed operator {type(v).__name__}")
+
+    def op_layout(self, v: Any) -> Layout:
+        """The input layout of a printed operator."""
+        from diracula import pathsum as P
+
+        if isinstance(v, P.Outer):
+            return tuple(v.bra.widths), tuple(v.bra.dims)
+        if isinstance(v, P.Scaled):
+            return self.op_layout(v.op)
+        if isinstance(v, P.OpSum):
+            for o in v.ops:
+                try:
+                    return self.op_layout(o)
+                except CertifyError:
+                    continue
+        raise CertifyError("an operator of unknown layout")
+
+    def certify_op(self, label: str, node: object, values: Mapping[str, object], value: Any) -> str:
+        """The Lean source certifying that the shown operator ``node`` equals its printed form."""
+        self.setup(len(self.log))
+        self.reader = Reader(self.parse, values, self.funcs)
+        lay = self.op_layout(value)
+        q, _ = self.op(node, lay)
+        pl = self.declare(("opl", label), "shown", f"show({label})", q)
+        pr = self.declare(
+            ("opr", label), "printed", f"the printed value of {label}", self.printed_op(value, lay)
+        )
+        er = prog_sym(pr, self.floors(), self.vs.pw)
+        if er is None:
+            raise CertifyError("the printed operator does not translate")
+        self.check(pl, er)
+        extra = [
+            "/-- The printed operator as one expression. -/\ndef RSYM : List ATm :=\n  "
+            + f"{self.text.ex(er)}\n",
+            *self.hint_decls(),
+        ]
+        stmt = f"{pl.name}.sem V = {pr.name}.sem V"
+        proof = (
+            f"certify_eq_lit V hρ FL FLOK PW PWOK {pl.name} {pr.name} SYM RSYM NF "
+            + DECIDES
+            + " (by decide +kernel) (by decide +kernel)"
+        )
+        if counts(pl) or counts(pr):
+            raise CertifyError("an operator with loops")
+        return self.source(label, f"{self.script}_show_{_clean(label)}", stmt, proof, extra, [])
+
+    def certify_action(
+        self, label: str, node: object, values: Mapping[str, object], probe: State, image: State
+    ) -> str:
+        """The Lean source certifying that the shown operator ``node`` maps the basis ket
+        ``probe`` of free value to the printed ``image``."""
+        self.setup(len(self.log))
+        self.reader = Reader(self.parse, values, self.funcs)
+        for t in probe.terms:
+            for v in t.kets:
+                for x in sympy.sympify(v).free_symbols:
+                    if x not in self.vs.ids:
+                        self.vs.ids[x] = PAR + 500 + len(self.vs.ids)
+                        self.vs.params.append(x.name)
+        lay = (tuple(probe.widths), tuple(probe.dims))
+        q, _ = self.op(node, lay)
+        pin = Prog("leaf", (state_terms(self.vs, probe),))
+        pl = self.declare(
+            ("act", label),
+            "shown",
+            f"show({label}) on a basis ket",
+            Prog("app", (self.levels(lay), q, pin)),
+        )
+        rhs = state_terms(self.vs, image)
+        self.check(pl, rhs)
+        extra = [
+            (
+                f"/-- The printed image of the basis ket under {label}. -/\n"
+                "def printed : List ATm :=\n  "
+                f"{self.text.ex(rhs)}\n"
+            ),
+            *self.hint_decls(),
+        ]
+        return self.source(
+            label,
+            f"{self.script}_show_{_clean(label)}",
+            self.lit_stmt(pl, "printed"),
+            self.lit_proof(pl, "printed", ""),
             extra,
             [],
         )
@@ -1623,7 +2539,20 @@ class Certifier:
             ),
             *self.hint_decls(),
         ]
-        if counts(pl) or counts(pr):
+        if self.ctx_used:
+            hyps, names = self.wl_intro()
+            stmt = (
+                f"∀ ν : ℕ → ℤ, {hyps}(∀ c ∈ {pl.name}.counts ++ {pr.name}.counts, "
+                f"0 ≤ ipDen ν c) → {pl.name}.sem V ν = {pr.name}.sem V ν"
+            )
+            two = self.rounds == 2
+            proof = (
+                f"fun ν {names} => certify_eq_w{'2' if two else ''}_c V hρ FL FLOK PW PWOK CTX "
+                f"{pl.name} {pr.name} SYM RSYM NF {'NF2 ' if two else ''}{DECIDES} "
+                f"{'(by decide +kernel) ' if two else ''}(by decide +kernel) (by decide +kernel) ν "
+                f"(CTXOK ν ⟪ASM⟫ {names})"
+            )
+        elif counts(pl) or counts(pr):
             stmt = (
                 f"∀ ν : ℕ → ℤ, (∀ c ∈ {pl.name}.counts ++ {pr.name}.counts, 0 ≤ ipDen ν c) "
                 f"→ {pl.name}.sem V ν = {pr.name}.sem V ν"
@@ -1768,22 +2697,284 @@ class Certifier:
         )
 
     def pushforward(self, name: str, raw: Any, mapped: Any) -> tuple[str, str, str, str]:
+        """Every outcome of ``raw`` maps to the value of a branch of ``mapped`` of the same
+        probability, the branches' values distinct."""
+        fn = self.outcome_fn
+        if len(mapped.branches) == 1 and not mapped.branches[0].free:
+            return self.pushforward_one(name, raw, mapped)
+        used: list[int] = []
+        claims = []
+        for br in raw.branches:
+            image = sympy.simplify(fn(br.value))
+            match = None
+            for m_i, mb in enumerate(mapped.branches):
+                if m_i in used or len(mb.free) != len(br.free):
+                    continue
+                sub = {f.symbol: g.symbol for f, g in zip(mb.free, br.free, strict=True)}
+                same_range = all(
+                    sympy.expand(f.hi - g.hi) == 0 for f, g in zip(mb.free, br.free, strict=True)
+                )
+                if (
+                    same_range
+                    and self.same_value(sympy.sympify(mb.value).xreplace(sub), image, br.free)
+                    and sympy.simplify(sympy.sympify(mb.prob).xreplace(sub) - br.prob) == 0
+                ):
+                    match = m_i
+                    break
+            if match is None:
+                raise CertifyError("an outcome whose image is no printed branch of its probability")
+            used.append(match)
+            names = {**self.size_names(), **{b.symbol: f"k{j}" for j, b in enumerate(br.free)}}
+            binders = " ".join(
+                f"∀ {names[b.symbol]} : ℕ, {names[b.symbol]} < {lean_nat(b.hi + 1, names)} →"
+                for b in br.free
+            )
+            target = sympy.sympify(mapped.branches[match].value).xreplace(
+                {
+                    f.symbol: g.symbol
+                    for f, g in zip(mapped.branches[match].free, br.free, strict=True)
+                }
+            )
+            claims.append(
+                f"{binders} {lean_nat(fn(br.value), names)} = {lean_nat(target, names)}".strip()
+            )
+        if len(used) != len(mapped.branches):
+            raise CertifyError("a printed branch that is no image")
+        if any(true_div(fn(br.value)) for br in raw.branches):
+            return self.pushforward_rat(name, raw, mapped, used)
+        distinct = []
+        for a_i, ma in enumerate(mapped.branches):
+            for b_i, mb in enumerate(mapped.branches):
+                if b_i < a_i:
+                    continue
+                na = {**self.size_names(), **{f.symbol: f"a{j}" for j, f in enumerate(ma.free)}}
+                nb = {**self.size_names(), **{f.symbol: f"b{j}" for j, f in enumerate(mb.free)}}
+                bind = " ".join(
+                    [
+                        f"∀ {na[f.symbol]} : ℕ, {na[f.symbol]} < {lean_nat(f.hi + 1, na)} →"
+                        for f in ma.free
+                    ]
+                    + [
+                        f"∀ {nb[f.symbol]} : ℕ, {nb[f.symbol]} < {lean_nat(f.hi + 1, nb)} →"
+                        for f in mb.free
+                    ]
+                )
+                va, vb = lean_nat(ma.value, na), lean_nat(mb.value, nb)
+                if a_i == b_i:
+                    if not ma.free:
+                        continue
+                    eqs = " ∧ ".join(
+                        f"{na[f.symbol]} = {nb[g.symbol]}"
+                        for f, g in zip(ma.free, mb.free, strict=True)
+                    )
+                    distinct.append(f"{bind} {va} = {vb} → {eqs}")
+                else:
+                    distinct.append(f"{bind} {va} ≠ {vb}")
+        allc = claims + distinct
+        hyps, haves = self.div_facts()
+        tac = (
+            "first | omega "
+            "| (intro k hk; rw [Nat.add_div_of_dvd_right (dvd_mul_of_dvd_left HD _), "
+            "Nat.div_eq_of_lt hk, add_zero]) "
+            "| (intro k hk; rw [Nat.add_div_of_dvd_right (Dvd.dvd.mul_left HD _), "
+            "Nat.div_eq_of_lt hk, add_zero]) "
+            "| (intro a ha b hb h; obtain ⟨q, hq⟩ := HD; "
+            "have hq0 : 0 < q := Nat.pos_of_ne_zero (by rintro rfl; simp at hq; omega); "
+            "rw [hq, Nat.mul_assoc, Nat.mul_assoc, Nat.mul_div_cancel_left _ HR, "
+            "Nat.mul_div_cancel_left _ HR] at h; exact Nat.eq_of_mul_eq_mul_left hq0 h)"
+        )
+        body = (
+            f"by ({tac})" if len(allc) == 1 else "⟨" + ", ".join(f"by ({tac})" for _ in allc) + "⟩"
+        )
+        stmt = " ∧ ".join(f"({c})" for c in allc)
+        if hyps:
+            stmt = " → ".join(hyps) + " → " + stmt
+            intros = " ".join(f"h_a{i}" for i in range(len(hyps)))
+            body = f"by\n  intro {intros}\n{haves}  exact {body}"
+        return (
+            (
+                "every outcome of the measurement maps to a printed value of its probability, the "
+                "printed values distinct"
+            ),
+            f"{self.script}_{_clean(name)}_values",
+            stmt,
+            body,
+        )
+
+    def pushforward_rat(
+        self, name: str, raw: Any, mapped: Any, used: Sequence[int]
+    ) -> tuple[str, str, str, str]:
+        """``pushforward`` over ``ℚ``: each floor of an image read as its quotient under the
+        assumed divisibility ``D2 = D1 q``."""
+        fn = self.outcome_fn
+        hyps, haves = self.div_facts()
+        div = next(
+            (
+                x.lhs.args
+                for x in self.assumptions
+                if isinstance(x, sympy.Eq) and x.rhs == 0 and isinstance(x.lhs, sympy.Mod)
+            ),
+            None,
+        )
+        if div is None:
+            raise CertifyError("a rational outcome without an assumed divisibility")
+        d2, d1 = div
+        qs = sympy.Symbol("q_", integer=True, positive=True)
+        nz = (
+            "first | exact Nat.cast_ne_zero.2 (by omega) "
+            "| exact Nat.cast_ne_zero.2 (pow_ne_zero _ (by omega)) "
+            "| exact Nat.cast_ne_zero.2 (Nat.mul_ne_zero (by omega) (by omega))"
+        )
+        q0 = (
+            "obtain ⟨q, hq⟩ := HD; have hq0 : 0 < q := Nat.pos_of_ne_zero "
+            "(by rintro rfl; simp at hq <;> omega); "
+            "have h2 : (q : ℚ) ≠ 0 := (by exact_mod_cast hq0.ne'); "
+        )
+        claims: list[tuple[str, str]] = []
+        for br, m_i in zip(raw.branches, used, strict=True):
+            names = {**self.size_names(), **{b.symbol: f"k{j}" for j, b in enumerate(br.free)}}
+            nq = {**names, qs: "q"}
+            image = fn(br.value)
+            mb = mapped.branches[m_i]
+            target = sympy.sympify(mb.value).xreplace(
+                {f.symbol: g.symbol for f, g in zip(mb.free, br.free, strict=True)}
+            )
+            binders = " ".join(
+                f"∀ {names[b.symbol]} : ℕ, {names[b.symbol]} < {lean_nat(b.hi + 1, names)} →"
+                for b in br.free
+            )
+            intro = " ".join(f"k{j} hk{j}" for j in range(len(br.free)))
+            hks = ", ".join(f"hk{j}" for j in range(len(br.free)))
+            hfl, rws = [], []
+            for i, fl in enumerate(sorted(sympy.sympify(image).atoms(sympy.floor), key=str)):
+                num, den = sympy.fraction(sympy.together(fl.args[0]))
+                w, _ = sympy.div(
+                    sympy.expand(num.subs(d2, d1 * qs)), sympy.expand(den.subs(d2, d1 * qs))
+                )
+                hfl.append(
+                    f"have hfl{i} : {lean_nat(fl, names)} = {lean_nat(w, nq)} := "
+                    f"Nat.div_eq_of_lt_le (by (try rw [hq]) <;> nlinarith [{hks}]) "
+                    f"(by (try rw [hq]) <;> nlinarith [{hks}]); "
+                )
+                rws.append(f"hfl{i}")
+            den_t = lean_rat(sympy.fraction(sympy.together(target))[1], names)
+            tac = (
+                f"intro {intro}; {q0}{''.join(hfl)}"
+                + (f"rw [{', '.join(rws)}]; " if rws else "")
+                + f"have h1 : {den_t} ≠ 0 := (by {nz}); "
+                + "(try rw [hq]); first | (push_cast; field_simp; done) "
+                + "| (push_cast; field_simp; ring)"
+            )
+            claims.append(
+                (f"{binders} {lean_rat(image, names)} = {lean_rat(target, names)}".strip(), tac)
+            )
+        for a_i, ma in enumerate(mapped.branches):
+            for b_i, mb in enumerate(mapped.branches):
+                if b_i < a_i or (a_i == b_i and not ma.free):
+                    continue
+                na = {**self.size_names(), **{f.symbol: f"a{j}" for j, f in enumerate(ma.free)}}
+                nb = {**self.size_names(), **{f.symbol: f"b{j}" for j, f in enumerate(mb.free)}}
+                bind = " ".join(
+                    [
+                        f"∀ {na[f.symbol]} : ℕ, {na[f.symbol]} < {lean_nat(f.hi + 1, na)} →"
+                        for f in ma.free
+                    ]
+                    + [
+                        f"∀ {nb[f.symbol]} : ℕ, {nb[f.symbol]} < {lean_nat(f.hi + 1, nb)} →"
+                        for f in mb.free
+                    ]
+                )
+                va, vb = lean_rat(ma.value, na), lean_rat(mb.value, nb)
+                ia = " ".join(f"a{j} ha{j}" for j in range(len(ma.free)))
+                ib = " ".join(f"b{j} hb{j}" for j in range(len(mb.free)))
+                den_t = lean_rat(sympy.fraction(sympy.together(ma.value))[1], na)
+                if a_i == b_i:
+                    eqs = " ∧ ".join(
+                        f"{na[f.symbol]} = {nb[g.symbol]}"
+                        for f, g in zip(ma.free, mb.free, strict=True)
+                    )
+                    tac = (
+                        f"intro {ia} {ib} h; have h1 : {den_t} ≠ 0 := (by {nz}); "
+                        "first | (rw [div_left_inj' h1] at h; exact_mod_cast h) "
+                        "| (field_simp at h; exact_mod_cast h)"
+                    )
+                    claims.append((f"{bind} {va} = {vb} → {eqs}", tac))
+                else:
+                    claims.append((f"{bind} {va} ≠ {vb}", f"intro {ia} {ib}; norm_num"))
+        stmt = " ∧ ".join(f"({c})" for c, _ in claims)
+        parts = [f"by\n    {t}" for _, t in claims]
+        body = parts[0] if len(parts) == 1 else "⟨" + ",\n  ".join(f"({p})" for p in parts) + "⟩"
+        if hyps:
+            stmt = " → ".join(hyps) + " → " + stmt
+            intros = " ".join(f"h_a{i}" for i in range(len(hyps)))
+            body = f"by\n  intro {intros}\n{haves}  exact {body}"
+        return (
+            (
+                "every outcome of the measurement maps to a printed value of its probability, the "
+                "printed values distinct"
+            ),
+            f"{self.script}_{_clean(name)}_values",
+            stmt,
+            body,
+        )
+
+    def same_value(self, a: sympy.Expr, b: sympy.Expr, free: Sequence[Any]) -> bool:
+        """Whether ``a = b`` given the assumed divisibilities and the indices' ranges."""
+        if sympy.simplify(a - b) == 0:
+            return True
+        subs = {}
+        for x in self.assumptions:
+            if isinstance(x, sympy.Eq) and x.rhs == 0 and isinstance(x.lhs, sympy.Mod):
+                d2, d1 = x.lhs.args
+                subs[d2] = d1 * sympy.Dummy("q", integer=True, positive=True)
+        if not subs:
+            return False
+        a2, b2 = sympy.sympify(a).subs(subs), sympy.sympify(b).subs(subs)
+        a2, b2 = sympy.simplify(a2), sympy.simplify(b2)
+        zero = {}
+        for f in free:
+            for fl in a2.atoms(sympy.floor) | b2.atoms(sympy.floor):
+                num, den = sympy.fraction(sympy.together(fl.args[0]))
+                if num == f.symbol and sympy.expand(den - (f.hi + 1)) == 0:
+                    zero[fl] = sympy.Integer(0)
+        return bool(sympy.simplify(a2.xreplace(zero) - b2.xreplace(zero)) == 0)
+
+    def size_names(self) -> dict[sympy.Symbol, str]:
+        """Lean names of the dimension and width symbols as natural numbers."""
+        out: dict[sympy.Symbol, str] = {}
+        for i, s in enumerate(self.vs.dsyms):
+            out[s] = f"(V.ρ.dv {i})"
+        for w in self.vs.widths:
+            out[w] = w.name
+        return out
+
+    def div_facts(self) -> tuple[list[str], str]:
+        """The assumptions as hypotheses, and ``HD : D1 ∣ D2``, ``HR : 0 < D1`` over ``ℕ`` for
+        the first assumed divisibility."""
+        props = [f"({self.lean_prop(a)})" for a in self.assumptions]
+        for i, a in enumerate(self.assumptions):
+            if isinstance(a, sympy.Eq) and a.rhs == 0 and isinstance(a.lhs, sympy.Mod):
+                names = self.size_names()
+                d2, d1 = (lean_nat(x, names) for x in a.lhs.args)
+                haves = (
+                    f"  have HD : {d1} ∣ {d2} := Int.natCast_dvd_natCast.1 (by push_cast; "
+                    f"exact Int.dvd_of_emod_eq_zero h_a{i})\n"
+                    f"  have HR : 0 < {d1} := by first | omega | positivity\n"
+                )
+                return props, haves
+        return props, ""
+
+    def pushforward_one(self, name: str, raw: Any, mapped: Any) -> tuple[str, str, str, str]:
         """Every outcome of ``raw`` maps to the value of the single branch of ``mapped``."""
-        if len(mapped.branches) != 1 or mapped.branches[0].free:
-            raise CertifyError("a function of outcomes with several values")
         target = mapped.branches[0].value
         claims = []
-        binders = []
         for br in raw.branches:
             names = {b.symbol: f"k{j}_{b.symbol.name.strip('_')}" for j, b in enumerate(br.free)}
-            fn = self.outcome_fn
-            image = fn(br.value)
-            for b in br.free:
-                binders.append(f"∀ {names[b.symbol]} : ℕ, {names[b.symbol]} < {b.hi + 1} →")
-            claims.append(
-                " ".join(binders) + f" {lean_nat(image, names)} = {lean_nat(target, names)}"
+            image = self.outcome_fn(br.value)
+            binders = "".join(
+                f"∀ {names[b.symbol]} : ℕ, {names[b.symbol]} < {b.hi + 1} → " for b in br.free
             )
-            binders = []
+            claims.append(f"{binders}{lean_nat(image, names)} = {lean_nat(target, names)}")
         stmt = " ∧ ".join(f"({c})" for c in claims)
         return (
             f"every outcome of the measurement maps to {target}",
@@ -1838,9 +3029,10 @@ class Certifier:
         if not self.assumptions:
             return stmt, proof
         props = [self.lean_prop(a) for a in self.assumptions]
+        proof = proof.replace("⟪ASM⟫", " ".join(f"h_a{i}" for i in range(len(props))))
         if stmt.startswith("∀ ν : ℕ → ℤ, "):
             hyp = " → ".join(f"({p})" for p in props)
-            under = " ".join("_" for _ in props)
+            under = " ".join(f"h_a{i}" for i in range(len(props)))
             return (
                 f"∀ ν : ℕ → ℤ, {hyp} → {stmt[len('∀ ν : ℕ → ℤ, ') :]}",
                 f"fun ν {under} => ({proof}) ν",
@@ -1852,7 +3044,7 @@ class Certifier:
             lhs, rhs = stmt.split(" = ", 1)
             body = f"{lhs} ν = {rhs} ν"
         hyp = " → ".join(f"({p})" for p in props)
-        under = " ".join("_" for _ in props)
+        under = " ".join(f"h_a{i}" for i in range(len(props)))
         return (f"∀ ν : ℕ → ℤ, {hyp} → {body}", f"fun ν {under} => congrFun ({proof}) ν")
 
     def source(
@@ -1865,6 +3057,43 @@ class Certifier:
         more: Sequence[tuple[str, str, str, str]],
     ) -> str:
         vs = self.vs
+        extra, more = list(extra), list(more)
+        for i, (psi, levels, kt, norm) in enumerate(self.nrm_obls):
+            inn = self.declare(
+                ("nrm_in", i),
+                f"ninner_{i}",
+                f"<s|s> of normalise #{i}",
+                Prog("inn", (levels, psi, psi)),
+            )
+            kleaf = Prog("leaf", ([kt],))
+            sb = self.declare(
+                ("nrm_b", i),
+                f"nunit_{i}",
+                f"k² <s|s> of normalise #{i}",
+                Prog("mul", (Prog("mul", (kleaf, kleaf)), inn)),
+            )
+            db, pb = self.lit(sb, scalar_terms(self.vs, sympy.Integer(1)), f"_n{i}", "One.")
+            if self.ctx_used or counts(sb):
+                raise CertifyError("normalise of a state with loops")
+            extra += [
+                f"/-- The coefficient 1/({norm}). -/\ndef KT_n{i} : ATm :=\n  {self.text.tm(kt)}\n",
+                db,
+            ]
+            more.append(
+                (
+                    f"normalise #{i} is its argument over the root of its norm",
+                    f"{thm}_nrm_{i}",
+                    (
+                        f"∀ ν : ℕ → ℤ, (Prog.mul (.leaf [KT_n{i}]) {psi.name}).sem V ν = "
+                        f"((Real.sqrt ({inn.name}.sem V ν).re : ℝ) : ℂ)⁻¹ * {psi.name}.sem V ν"
+                    ),
+                    (
+                        f"fun ν => nrm_scale V hρ _ {psi.name} KT_n{i} (by decide +kernel) ν "
+                        f"(congrFun ({pb}) ν)"
+                    ),
+                )
+            )
+        self.nrm_obls = []
         stmt, proof = self.assumed(stmt, proof)
         more = [
             (w, t, *self.assumed(st, pr))
@@ -1893,19 +3122,16 @@ class Certifier:
         pw_cases = []
         for s, (base, n) in vs.powers.items():
             j = vs.dsyms.index(s)
-            rhs = (
-                f"V.ρ.dv {vs.dsyms.index(base)} ^ {n.name}"
-                if base in vs.dsyms
-                else f"{base} ^ {n.name}"
-            )
+            ex = exp_text(n)
+            rhs = f"V.ρ.dv {vs.dsyms.index(base)} ^ {ex}" if base in vs.dsyms else f"{base} ^ {ex}"
             hname = f"h_{_clean(s.name)}"
             hyps.append((hname, f"V.ρ.dv {j} = {rhs}"))
-            names = f"dim_{_clean(s.name)}" + (
+            dnames = f"dim_{_clean(s.name)}" + (
                 f", dim_{_clean(base.name)}" if base in vs.dsyms else ""
             )
             pw_cases.append(
-                f"  · exact ⟨by simp [{names}, DMon.den, npow] <;> omega, {n.name}, "
-                f"by simp [{names}, DMon.den, npow, {hname}]⟩"
+                f"  · exact ⟨by simp [{dnames}, DMon.den, npow] <;> omega, {ex}, "
+                f"by simp [{dnames}, DMon.den, npow, {hname}]⟩"
             )
         hyp_text = " ".join(f"({a} : {b})" for a, b in hyps)
         args_text = " ".join(a for a, _ in hyps)
@@ -1938,7 +3164,81 @@ class Certifier:
             )
         else:
             pw_proof = "by intro p hp; simp [PW] at hp"
-        params = ", ".join(f"{n} is ν {PAR + k}" for k, n in enumerate(vs.params))
+        ctx_lines: list[str] = []
+        ctxok = ""
+        if self.ctx_any:
+            wl, dv = self.wl(), self.dv()
+            wl_text = ", ".join(f"({v}, {self.text.dm(d)}, {self.text.dm(n)})" for v, d, n in wl)
+            dv_text = ", ".join(f"({self.text.dm(a)}, {self.text.dm(b)})" for a, b in dv)
+            vs_used: list[tuple[int, str]] = []
+            for v, _, _ in wl:
+                if (v, vs.params[v - PAR]) not in vs_used:
+                    vs_used.append((v, vs.params[v - PAR]))
+            props = [self.lean_prop(a) for a in self.assumptions]
+            hyp_a = " ".join(f"(h_a{i} : {q})" for i, q in enumerate(props))
+            hyp_nu = " ".join(f"(h_ν{v} : ν {v} = ({n} : ℤ))" for v, n in vs_used)
+            nus = [f"h_ν{v}" for v, _ in vs_used]
+
+            def names(*ms: Y.DMon) -> list[str]:
+                return [self.text.dms[m] for m in ms if m in self.text.dms]
+
+            def power_h(m: Y.DMon) -> list[str]:
+                return [f"h_{_clean(a.name)}" for a in vs.powers if vs.dmon(a) == m]
+
+            def wl_case(d: Y.DMon, n: Y.DMon) -> str:
+                simps = ", ".join([*names(d, n), "DMon.den", "npow", *nus, *power_h(n)])
+                return f"    · exact ⟨by simp [{', '.join(nus)}], by simp [{simps}]⟩"
+
+            wl_cases = [wl_case(d, n) for _, d, n in wl]
+            dv_cases = []
+            for (a, b), asm in zip(
+                dv,
+                [
+                    k
+                    for k, x in enumerate(self.assumptions)
+                    if isinstance(x, sympy.Eq) and isinstance(x.lhs, sympy.Mod)
+                ],
+            ):
+                simps = ", ".join([*names(a, b), "DMon.den", "npow", *power_h(a), *power_h(b)])
+                pos = (
+                    f"by simp only [{simps}, pow_zero, pow_one, one_mul, mul_one]; "
+                    f"first | omega | exact Nat.pow_pos (by omega) | positivity"
+                )
+                dv_cases.append(
+                    f"    · refine ⟨{pos}, {pos}, ?_⟩\n"
+                    f"      simp only [{simps}, pow_zero, pow_one, one_mul, mul_one]\n"
+                    "      exact Int.natCast_dvd_natCast.1 (by push_cast; "
+                    f"exact Int.dvd_of_emod_eq_zero h_a{asm})"
+                )
+
+            def part(cases: list[str], n: int) -> str:
+                if n == 0:
+                    return "  · simp [CTX] at hw"
+                return (
+                    "  · simp only [CTX, List.mem_cons, List.not_mem_nil, or_false] at hw\n"
+                    f"    rcases hw with {' | '.join(['rfl'] * n)}\n" + "\n".join(cases)
+                )
+
+            hyp_bind = " ".join(f"({a} : {b})" for a, b in hyps)
+            ctx_lines = [
+                (
+                    f"/-- The context of the closing pass: loop counts that equal widths, assumed "
+                    f"divisibilities. -/\n"
+                    f"def CTX : Ctx := ⟨[], [{wl_text}], [{dv_text}]⟩\n"
+                ),
+                f"theorem ctxOK (V : LV){' ' if hyps else ''}{hyp_bind} "
+                f"(ν : ℕ → ℤ) {hyp_a} {hyp_nu} : CtxOK V CTX ν := by\n"
+                f"  refine ⟨fun j hj => by simp [CTX] at hj, fun w hw => ?_, fun w hw => ?_⟩\n"
+                + part(wl_cases, len(wl))
+                + "\n"
+                + part(dv_cases, len(dv))
+                + "\n",
+            ]
+            ctxok = f"(ctxOK V{' ' if hyps else ''}{' '.join(a for a, _ in hyps)})"
+        params = ", ".join(
+            [f"{n} is ν {PAR + k}" for k, n in enumerate(vs.params)]
+            + [f"{c} is V.ρ.atom {2 * k}" for k, c in enumerate(vs.catoms)]
+        )
         funcs = ", ".join(f"{n} is V.fa {k}" for k, n in enumerate(vs.funcs))
         decls = [f"-- {c}\ndef {p.name} : Prog :=\n  {self.text.prog(p)}\n" for c, p in self.decls]
         sep = " " if hyp_text else ""
@@ -1970,6 +3270,7 @@ class Certifier:
             f"theorem flOK (V : LV){sep}{hyp_text} : FloorOK FL V.ρ :=",
             f"  {fl_proof}\n",
             f"theorem pwOK (V : LV){sep}{hyp_text} : PowOK PW V.ρ := {pw_proof}\n",
+            *ctx_lines,
         ]
         for w, t, st, pr in [(what, thm, stmt, proof), *more]:
             if not t:
@@ -1980,7 +3281,11 @@ class Certifier:
                 f"/-- {w} -/",
                 f"theorem {t} (V : LV) (hρ : V.ρ.OK){sep}{hyp_text} :",
                 f"    {st} :=",
-                "  " + pr.replace("FLOK", flok).replace("PWOK", pwok),
+                "  "
+                + pr.replace("FLOK", flok)
+                .replace("PWOK", pwok)
+                .replace("CTXOK", ctxok)
+                .replace("⟪ASM⟫", ""),
                 "",
                 f"#print axioms {t}",
                 "",

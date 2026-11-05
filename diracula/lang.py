@@ -66,12 +66,14 @@ import os
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import numpy as np
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
 from diracula import display as D
 from diracula import lean_lang as LL
+from diracula import operators as O
 from diracula import pathsum as P
 from diracula import zxsym, zxview
 from diracula.zx import draw as zxdraw
@@ -245,9 +247,12 @@ class Braket:
 
 @dataclass(frozen=True)
 class MeasureNode:
-    """``measure|name>``."""
+    """``measure|name>``, or ``measure(|name>, R, B)`` over the registers ``R`` in the basis of
+    the gate ``B``."""
 
     target: Braket
+    regs: object | None = None
+    basis: object | None = None
 
 
 @dataclass(frozen=True)
@@ -274,6 +279,13 @@ class MatrixFor:
     hi: object
     body: object
     inclusive: bool = False
+
+
+@dataclass(frozen=True)
+class SetNode:
+    """``{a, b, ...}``: register positions."""
+
+    items: tuple[object, ...]
 
 
 @dataclass(frozen=True)
@@ -410,10 +422,18 @@ class Parser:
 
     def power(self) -> object:
         node = self.postfix()
+        while self.at("^") and self._dagger_next():
+            self.take()
+            self.take()
+            node = Call("adj", (node,))
         if self.at("^"):
             self.take()
             return Bin("^", node, self.unary())
         return node
+
+    def _dagger_next(self) -> bool:
+        t = self.peek(1)
+        return t is not None and t.kind == "ident" and t.text == "dagger"
 
     def postfix(self) -> object:
         node = self.atom()
@@ -445,6 +465,20 @@ class Parser:
                 return self.matrix()
             if t.text == "measure":
                 self.i += 1
+                if self.at("("):
+                    self.take("(")
+                    target = self.peek()
+                    if target is None or target.kind != "ket":
+                        raise LangSyntaxError("measure(|psi>, R) takes a named ket first")
+                    self.i += 1
+                    self.take(",")
+                    regs = self.tensor()
+                    basis = None
+                    if self.at(","):
+                        self.take(",")
+                        basis = self.expr()
+                    self.take(")")
+                    return MeasureNode(Braket(target.text, False, target.dim), regs, basis)
                 target = self.peek()
                 if target is None or target.kind != "ket":
                     raise LangSyntaxError("measure takes a named ket, e.g. measure|psi>")
@@ -464,6 +498,11 @@ class Parser:
             return node
         if t.kind == "op" and t.text == "[":
             return self.brackets()
+        if t.kind == "op" and t.text == "{":
+            self.take("{")
+            items = [] if self.at("}") else self.args()
+            self.take("}")
+            return SetNode(tuple(items))
         raise LangSyntaxError(f"unexpected {t.text!r} at column {t.pos + 1}")
 
     def brackets(self) -> MatrixNode | VectorNode:
@@ -607,6 +646,8 @@ def _has_gate(op: P.Operator) -> bool:
         return any(_has_gate(f) for f in op.factors)
     if isinstance(op, (P.Compose, P.OpSum)):
         return any(_has_gate(o) for o in op.ops)
+    if isinstance(op, P.Derived):
+        return _has_gate(op.like)
     return False
 
 
@@ -650,6 +691,9 @@ _FUNCS: dict[str, Callable[..., sympy.Expr]] = {
 }
 _SPECIAL = {"arg", "rand"}
 _STATE_FUNCS = {"normalise"}
+_OP_FUNCS = {"adj", "inv", "tr", "keep"}
+_OP_ANALYTIC = {"exp", "sqrt", "cos", "sin", "tan", "log"}
+_CHANNEL_FUNCS = {"depolarize": O.depolarize, "dephase": O.dephase, "amp_damp": O.amp_damp}
 _CONSTANTS = {"pi": sympy.pi, "e": sympy.E, "i": sympy.I}
 _STATEMENTS = {
     "var",
@@ -666,6 +710,7 @@ _STATEMENTS = {
     "assert",
     "assume",
     "certify",
+    "channel",
 }
 _RESERVED = (
     _STATEMENTS
@@ -673,6 +718,8 @@ _RESERVED = (
     | set(_FUNCS)
     | _SPECIAL
     | _STATE_FUNCS
+    | _OP_FUNCS
+    | set(_CHANNEL_FUNCS)
     | set(_CONSTANTS)
     | {"sum", "matrix"}
     | set(D.STYLES)
@@ -991,6 +1038,11 @@ class Interpreter:
         self.sugar: list[tuple[str, sympy.Expr]] = []
         self.funcs: dict[str, type] = {}
         self.ops: dict[str, P.Operator] = {"I": P.Identity()}
+        self.channels: dict[str, O.AnyChannel] = {}
+        self.channel_nodes: dict[str, object] = {}
+        self.alias_nodes: dict[str, object] = {}
+        """Each gate named by an operator expression: that expression's tree."""
+        """Each channel's defining syntax tree, for certificates."""
         self.slots: dict[str, list[tuple[str, str | None]]] = {}
         self.states: dict[str, P.State | P.Mixed] = {}
         self.lists: dict[str, list[tuple[D.Label | None, object]]] = {}
@@ -1012,6 +1064,8 @@ class Interpreter:
         self.asserts = 0
         self.cert_names: dict[str, int] = {}
         self.measured: list[tuple[str, P.Distribution, int]] = []
+        self.partial_measured: list[tuple[str, int]] = []
+        """Each partial or basis measurement: the state and the log position before it."""
         self.norms: dict[int, list[sympy.Expr]] = {}
         """Each measurement: the state, its distribution and the log position before it."""
         self._text = ""
@@ -1040,10 +1094,21 @@ class Interpreter:
         for stmt in _split_statements(source):
             text = stmt.strip()
             if text:
-                with P.divisible(self._divisibility()), P.ranged(self._ranges()):
-                    printed = self._statement(text)
+                with (
+                    P.divisible(self._divisibility()),
+                    P.ranged(self._ranges()),
+                    O.real_ranged(self._real_ranges()),
+                ):
+                    O.NOTES.clear()
+                    try:
+                        printed = self._statement(text)
+                    finally:
+                        notes = list(dict.fromkeys(O.NOTES))
+                        O.NOTES.clear()
                 if printed:
                     self._out.append((None, printed))
+                for note in notes:
+                    self._out.append((None, note))
 
     def _divisibility(self) -> list[tuple[sympy.Expr, sympy.Expr]]:
         """``(a, b)`` for each assumption ``a % b == 0``."""
@@ -1085,11 +1150,36 @@ class Interpreter:
             for x in lows.keys() | highs.keys()
         }
 
+    def _real_ranges(self) -> dict[sympy.Symbol, tuple[sympy.Expr, sympy.Expr]]:
+        """``(lo, hi)`` inclusive for each real symbol that is not an integer, from the
+        assumptions bounding it by constants."""
+        lows: dict[sympy.Symbol, sympy.Expr] = {}
+        highs: dict[sympy.Symbol, sympy.Expr] = {}
+        for fact in self.assumptions:
+            if not isinstance(fact, (sympy.LessThan, sympy.GreaterThan)):
+                continue
+            for rel in (fact, fact.reversed):
+                x, b = rel.lhs, rel.rhs
+                if not (x.is_Symbol and x.is_real and not x.is_integer and b.is_number):
+                    continue
+                if isinstance(rel, sympy.LessThan):
+                    highs[x] = b
+                else:
+                    lows[x] = b
+        return {
+            x: (lows.get(x, -sympy.oo), highs.get(x, sympy.oo)) for x in lows.keys() | highs.keys()
+        }
+
     def _parser(self, toks: list[Tok]) -> Parser:
         return Parser(
             toks,
             lambda name: (
-                name in _FUNCS or name in _SPECIAL or name in _STATE_FUNCS or name in self.funcs
+                name in _FUNCS
+                or name in _SPECIAL
+                or name in _STATE_FUNCS
+                or name in _OP_FUNCS
+                or name in _CHANNEL_FUNCS
+                or name in self.funcs
             ),
         )
 
@@ -1139,7 +1229,7 @@ class Interpreter:
         if not _IDENT.fullmatch(name) or name not in self.states:
             return False
         ops = [self._eval(left, Ctx()) for left in lefts]
-        if not all(isinstance(op, P.Operator) for op in ops):
+        if not all(isinstance(op, (P.Operator, *_CHANNELS)) for op in ops):
             return False
         value: object = self._eval(node, Ctx())
         for op in reversed(ops):
@@ -1149,6 +1239,8 @@ class Interpreter:
                 raise LangError(str(exc)) from exc
         if isinstance(value, P.Mixed):
             self.states[name] = value
+            if any(isinstance(op, _CHANNELS) for op in ops) or self._dens_recorded(name):
+                self._record("dapply", name, tuple(lefts), value)
             self.last = Echo(self._label("ket", name), "density", value)
             return True
         if not isinstance(value, P.State) or value.bra:
@@ -1169,6 +1261,8 @@ class Interpreter:
             return "dist"
         if isinstance(v, P.Operator):
             return "op"
+        if isinstance(v, _CHANNELS):
+            return "channel"
         if isinstance(v, (bool, sympy.logic.boolalg.Boolean)):
             return "bool"
         if isinstance(v, sympy.Basic):
@@ -1372,6 +1466,15 @@ class Interpreter:
             self.trees, self.log, lambda t: self._parser(tokenize(t)).expr(), self.script, funcs
         )
         cert.assumptions = list(self.assumptions)
+        cert.channels = dict(self.channel_nodes)
+        cert.aliases = dict(self.alias_nodes)
+        cert.hooks = {
+            "layout": lambda node: self._layout(cast(P.Operator, self._eval(node, Ctx()))),
+            "value": lambda node: self._eval(node, Ctx()),
+            "power": lambda node, j, init: P.apply(
+                O.power(cast(P.Operator, self._eval(node, Ctx())), j), init
+            ),
+        }
         cert.norms = self.norms
         return cert
 
@@ -1381,8 +1484,14 @@ class Interpreter:
         try:
             if name in self.states:
                 value = self.states[name]
-                if isinstance(value, P.Mixed):
+                if isinstance(value, P.Mixed) and self._dens_recorded(name):
+                    source = cert.certify_dstate(name, value)
+                elif isinstance(value, P.Mixed):
                     found = [m for m in self.measured if m[0] == name]
+                    if found and any(
+                        lab == name and at >= found[-1][2] for lab, at in self.partial_measured
+                    ):
+                        raise LL.CertifyError("a density matrix left by a partial measurement")
                     if (
                         not found
                         or self.log[-1].name != name
@@ -1405,6 +1514,16 @@ class Interpreter:
 
     def _certify_dist(self, cert: LL.Certifier, name: str) -> str:
         node, upto, values = self.var_trees[name]
+        if _partial(node):
+            if not (isinstance(node, MeasureNode) and node.regs is not None):
+                raise LL.CertifyError(f"{name} is a function of a partial measurement")
+            label = node.target.content.strip()
+            at = next(
+                (k for k in range(upto, len(self.log)) if self.log[k].kind == "pmeasure"), None
+            )
+            if at is None:
+                raise LL.CertifyError(f"{name} reads no recorded measurement")
+            return cert.certify_pdist(name, label, at, values, self.values[name])
         found = [m for m in self.measured if m[2] >= upto]
         if not found:
             raise LL.CertifyError(f"{name} reads no measurement")
@@ -1422,6 +1541,8 @@ class Interpreter:
         names = [n.id for n in _names_in(node) if isinstance(self.values.get(n.id), P.Distribution)]
         if not names or names[0] not in self.var_trees:
             raise LL.CertifyError(f"{source} reads no measured variable")
+        if _partial(self.var_trees[names[0]][0]):
+            raise LL.CertifyError(f"{source} reads a partial measurement")
         _, upto, values = self.var_trees[names[0]]
         found = [m for m in self.measured if m[2] >= upto]
         if not found:
@@ -1585,6 +1706,34 @@ class Interpreter:
             raise LangError(str(exc)) from exc
         return P.joined(dist, layout)
 
+    def _measure_part(self, node: MeasureNode, ctx: Ctx) -> P.Distribution:
+        """Measures the registers ``node.regs`` of the named state, in the basis of the gate
+        ``node.basis`` when given; the state becomes the mixture left by that measurement."""
+        label = node.target.content.strip()
+        if not _IDENT.fullmatch(label) or label not in self.states:
+            raise LangTypeError(f"|{label}> is not defined")
+        self._check_dim(label, self._dim(node.target.dim, Ctx()))
+        regs = self._registers(node.regs, ctx)
+        basis: P.Operator | None = None
+        if node.basis is not None:
+            got = self._eval_node(node.basis, ctx)
+            if not isinstance(got, P.Operator):
+                raise LangTypeError(f"a measurement basis is a gate, got {self._kind(got)}")
+            basis = got
+        try:
+            dist, post = O.measure_registers(self.states[label], regs, basis)
+        except P.PathSumError as exc:
+            raise LangError(str(exc)) from exc
+        self.states[label] = post
+        self.partial_measured.append((label, len(self.log)))
+        self._record("pmeasure", label, (node.regs, node.basis), post)
+        return dist
+
+    def _dens_recorded(self, name: str) -> bool:
+        """Whether the last event of ``name`` is a recorded density matrix."""
+        last = next((e for e in reversed(self.log) if e.name == name), None)
+        return last is not None and last.kind in _DENS_EVENTS
+
     def _stmt_measure(self, toks: list[Tok], text: str, builtin: bool) -> None:
         p = self._parser(toks)
         value = self._eval(p.expr(), Ctx())
@@ -1634,6 +1783,16 @@ class Interpreter:
             self.ops[name] = self._matrix_gate(name, pattern, Ctx(), None, source)
             self.trees[name] = LL.GateTree((), pattern, source)
             self.last = Echo(D.Label("op", name), "gate", self.ops[name])
+            return
+        if p.done():
+            value = self._eval(pattern, Ctx())
+            if not isinstance(value, P.Operator):
+                raise LangSyntaxError(
+                    f"gate {name} = needs PATTERN -> EXPRESSION, a matrix or an operator"
+                )
+            self.ops[name] = value
+            self.alias_nodes[name] = pattern
+            self.last = Echo(D.Label("op", name), "gate", value)
             return
         p.take("->")
         body = p.expr()
@@ -1735,7 +1894,18 @@ class Interpreter:
 
         arity = len(slots) if slots else 1
         frozen = tuple(slots) if slots else None
-        return _MatrixGate(name, arity, fn, source=source or name, size=size, slots=frozen)
+        entries = None
+        if isinstance(node, MatrixNode):
+
+            def entries() -> list[list[sympy.Expr]]:
+                return [
+                    [self._scalar(self._eval_node(e, ctx), "a matrix entry") for e in r]
+                    for r in node.rows
+                ]
+
+        return _MatrixGate(
+            name, arity, fn, source=source or name, size=size, slots=frozen, matrix=entries
+        )
 
     def _vector(self, node: VectorNode, ctx: Ctx) -> P.State:
         """``[a, b, ...]`` as ``a|0> + b|1> + ...`` on one register of that many levels."""
@@ -1903,6 +2073,8 @@ class Interpreter:
                 )
             elif isinstance(value, P.Distribution):
                 src = self._certify_dist_expr(cert, node, source, value)
+            elif isinstance(value, P.Mixed) and _dens_tree(node, self.channels):
+                src = cert.certify_density(source, node, dict(self.values), value)
             elif not isinstance(value, P.State) or isinstance(value, P.Mixed):
                 raise LL.CertifyError(f"{source} is not a state or a scalar variable")
             elif isinstance(node, Call) and node.name == "normalise" and len(node.args) == 1:
@@ -2189,7 +2361,10 @@ class Interpreter:
                 value = density
         if isinstance(value, P.Mixed) and head.kind == "ket" and head.dim is None:
             self.states[name] = value
-            self._record("opaque", name, (), value, "a density matrix")
+            if _dens_tree(rest_node, self.channels):
+                self._record("dassign", name, (rest_node,), value)
+            else:
+                self._record("opaque", name, (), value, "a density matrix")
             self.last = Echo(self._label("ket", name), "density", value)
             return
         if not isinstance(value, P.State):
@@ -2233,6 +2408,8 @@ class Interpreter:
             return "an operator"
         if isinstance(v, P.Distribution):
             return "a measured distribution"
+        if isinstance(v, _CHANNELS):
+            return "a channel"
         return "a scalar"
 
     def _scalar(self, v: object, where: str) -> sympy.Expr:
@@ -2262,8 +2439,23 @@ class Interpreter:
             return self._special(node, ctx)
         if isinstance(node, Call) and node.name == "normalise":
             return self._normalise(node, ctx)
+        if isinstance(node, Call) and node.name in _OP_FUNCS:
+            return self._op_func(node, ctx)
+        if isinstance(node, Call) and node.name in _CHANNEL_FUNCS:
+            if len(node.args) != 1:
+                raise LangTypeError(f"usage: {node.name}(PARAMETER)")
+            return _CHANNEL_FUNCS[node.name](
+                self._scalar(self._eval_node(node.args[0], ctx), node.name)
+            )
+        if isinstance(node, MeasureNode) and node.regs is not None:
+            return self._measure_part(node, ctx)
         if isinstance(node, MeasureNode):
             return self._measure(node.target)
+        if isinstance(node, Call) and node.name in _OP_ANALYTIC and len(node.args) == 1:
+            arg = self._eval_node(node.args[0], ctx)
+            if isinstance(arg, P.Operator):
+                return O.op_function(node.name, arg, _op_text(node.args[0]))
+            return self._lift(lambda v: self._call_func(node, v), [arg])
         if isinstance(node, Call):
             fn = _FUNCS.get(node.name) or self.funcs[node.name]
 
@@ -2296,11 +2488,26 @@ class Interpreter:
             return self._vector(node, ctx)
         if isinstance(node, Juxt):
             return self._juxt(self._eval_node(node.left, ctx), self._eval_node(node.right, ctx))
+        if isinstance(node, Bin) and node.op == "^":
+            left = self._eval_node(node.left, ctx)
+            right = self._eval_node(node.right, ctx)
+            if isinstance(left, P.Operator):
+                return O.power(left, self._scalar(right, "an operator power"), _op_text(node.left))
+            return self._binary(node.op, left, right)
         if isinstance(node, Bin):
             return self._binary(
                 node.op, self._eval_node(node.left, ctx), self._eval_node(node.right, ctx)
             )
         raise LangSyntaxError(f"cannot evaluate {node!r}")
+
+    def _call_func(self, node: Call, *args: object) -> object:
+        """The scalar function of ``node`` applied to ``args``."""
+        fn = _FUNCS.get(node.name) or self.funcs[node.name]
+        vals = [self._scalar(a, f"an argument of {node.name}") for a in args]
+        try:
+            return fn(*vals)
+        except (TypeError, ValueError) as exc:
+            raise LangTypeError(f"{node.name}: {exc}") from exc
 
     def _lift(self, fn: Callable[..., object], args: list[object]) -> object:
         """``fn(*args)``, mapped over the outcomes of the one argument that is a measured
@@ -2336,6 +2543,8 @@ class Interpreter:
             return _CONSTANTS[name]
         if name in self.ops:
             return self.ops[name]
+        if name in self.channels:
+            return self.channels[name]
         if name in self.funcs:
             raise LangTypeError(f"{name} is a function; call it as {name}(...)")
         if name in self.states:
@@ -2426,7 +2635,9 @@ class Interpreter:
             return _flex(P.simplify(P.State(body.widths, terms, body.bra, body.dims)), _flags(body))
         if isinstance(body, sympy.Basic):
             return sympy.Sum(body, (b.symbol, lo, hi)).doit()
-        raise LangTypeError("a sum body must be a state or a scalar")
+        if isinstance(body, P.Operator):
+            return P.Family(body, (b,))
+        raise LangTypeError("a sum body must be a state, an operator or a scalar")
 
     def _mixed_binary(self, op: str, a: object, b: object) -> object:
         """``+ - * /`` on density matrices: sums of equal layouts and scalar multiples."""
@@ -2456,6 +2667,8 @@ class Interpreter:
     def _juxt(self, a: object, b: object) -> object:
         if isinstance(a, P.Distribution) or isinstance(b, P.Distribution):
             return self._lift(self._juxt, [a, b])
+        if isinstance(a, _CHANNELS) or isinstance(b, _CHANNELS):
+            return self._channel_juxt(a, b)
         if isinstance(a, sympy.Basic) or isinstance(b, sympy.Basic):
             return self._mul(a, b)
         if isinstance(b, P.Mixed):
@@ -2489,6 +2702,72 @@ class Interpreter:
                 return P.Outer(a, b)
             return _flex(P.tensor(a, b), _flags(a) + _flags(b))
         raise LangTypeError(f"cannot apply {self._kind(a)} to {self._kind(b)}")
+
+    def _as_channel(self, x: object) -> O.AnyChannel:
+        if isinstance(x, _CHANNELS):
+            return x
+        if isinstance(x, P.Operator):
+            return O.Channel(_op_name(x), ((x, ()),))
+        raise LangTypeError(f"a channel composes with channels and gates, got {self._kind(x)}")
+
+    def _channel_juxt(self, a: object, b: object) -> object:
+        """``E rho``, ``E |psi>`` (as its density matrix) and the composition ``E F``."""
+        if isinstance(b, (P.State, P.Mixed)):
+            if isinstance(b, P.State) and b.bra:
+                raise LangTypeError("a channel applies to a ket or a density matrix")
+            warn: list[str] = []
+            try:
+                out = O.apply_channel(self._as_channel(a), O.as_mixed(b), warn=warn)
+            except P.PathSumError as exc:
+                raise LangError(str(exc)) from exc
+            for w in warn:
+                self._out.append((None, w))
+            return out
+        ea, eb = self._as_channel(a), self._as_channel(b)
+        return O.ChannelSeq(f"{ea.name} {eb.name}", (ea, eb))
+
+    def _stmt_channel(self, toks: list[Tok], text: str, builtin: bool) -> None:
+        p = self._parser(toks[1:])
+        name = p.take().text
+        self._check_name(name, "channel")
+        p.take("=")
+        node = p.expr()
+        if not p.done():
+            raise LangSyntaxError(f"unexpected {p.peek().text!r} in channel {name}")  # type: ignore[union-attr]
+        items = node.items if isinstance(node, SetNode) else (node,)
+        kraus: list[tuple[P.Operator, tuple[P.Bound, ...]]] = []
+        for item in items:
+            if isinstance(item, (SumNode, SetNode)):
+                kraus += self._kraus(item, Ctx())
+                continue
+            v = self._eval(item, Ctx())
+            if isinstance(v, _CHANNELS) and len(items) == 1:
+                self.channels[name] = v
+                self.channel_nodes[name] = item
+                return
+            if not isinstance(v, P.Operator):
+                raise LangTypeError(f"a Kraus operator is an operator, got {self._kind(v)}")
+            kraus.append((v, ()))
+        if not kraus:
+            raise LangTypeError(f"channel {name} needs at least one Kraus operator")
+        self.channels[name] = O.Channel(name, tuple(kraus))
+        self.channel_nodes[name] = node
+        self.last = Echo(D.Label("op", name), "channel", self.channels[name])
+
+    def _kraus(self, node: object, ctx: Ctx) -> list[tuple[P.Operator, tuple[P.Bound, ...]]]:
+        """The Kraus operators of ``node``: a sum over a range is a family of them."""
+        if isinstance(node, SetNode):
+            return [k for item in node.items for k in self._kraus(item, ctx)]
+        if isinstance(node, SumNode):
+            lo = self._scalar(self._eval_node(node.lo, ctx), "a sum bound")
+            hi = self._scalar(self._eval_node(node.hi, ctx), "a sum bound")
+            b = P.new_bound(node.var, lo, hi if node.inclusive else hi - 1)
+            inner = ctx.child(node.var, Local(b.symbol, bound=b))
+            return [(op, (b,) + bs) for op, bs in self._kraus(node.body, inner)]
+        v = self._eval_node(node, ctx)
+        if not isinstance(v, P.Operator):
+            raise LangTypeError(f"a Kraus operator is an operator, got {self._kind(v)}")
+        return [(v, ())]
 
     def _bra_times(self, a: P.State, op: P.Operator) -> P.State:
         """``<a| U`` as ``sum_x <a|U|x> <x|`` over the registers of ``a``."""
@@ -2558,8 +2837,10 @@ class Interpreter:
         """``(width, dimension)`` of each register ``op`` acts on, or None when unknown."""
         if isinstance(op, _MatrixGate) and op.slots is None:
             return None if op.size is None else [(sympy.S.One, op.size)]
+        if isinstance(op, P.Derived):
+            return self._layout(op.like)
         if isinstance(op, P.Gate):
-            slots = self.slots.get(op.name, [("", None)] * op.arity)
+            slots = self.slots.get(_root(op).name, [("", None)] * op.arity)
             try:
                 dims = [self._dim(want, Ctx()) for _, want in slots]
             except LangError:
@@ -2586,15 +2867,18 @@ class Interpreter:
     def _fit_gate(self, op: P.Operator, s: P.State) -> P.State:
         """``s`` with flexible registers raised to the layout a gate's pattern or matrix
         names; an unresolved one becomes one digit of the slot's dimension (2 by default)."""
+        if isinstance(op, P.Derived):
+            return self._fit_gate(op.like, s)
         if isinstance(op, _MatrixGate) and op.slots is None:
             return _fit_matrix(op, s)
         if not isinstance(op, P.Gate):
             return s
-        known = self.slots.get(op.name)
+        root = _root(op)
+        known = self.slots.get(root.name)
         slots: Sequence[tuple[str, str | None]]
         if isinstance(op, _MatrixGate) and op.slots is not None:
             slots = op.slots
-        elif known is None or self.ops.get(op.name) is not op:
+        elif known is None or self.ops.get(root.name) is not root:
             slots = [("", None)] * op.arity
         else:
             slots = known
@@ -2628,6 +2912,82 @@ class Interpreter:
         if norm == 0:
             raise LangTypeError("cannot normalise the zero vector")
         return _flex(P.simplify(P.scale(1 / norm, s)), _flags(s))
+
+    def _op_func(self, node: Call, ctx: Ctx) -> object:
+        """``adj(X)``, ``inv(X)``, ``tr(X)``, ``tr(X, R)`` and ``keep(X, R)``."""
+        if node.name in ("tr", "keep"):
+            return self._trace(node, ctx)
+        if len(node.args) != 1:
+            raise LangTypeError(f"usage: {node.name}(OPERATOR)")
+        v = self._eval_node(node.args[0], ctx)
+        if node.name == "adj":
+            if isinstance(v, P.Operator):
+                return O.adjoint(v)
+            if isinstance(v, P.State):
+                return _flex(P.dagger(v), _flags(v))
+            if isinstance(v, P.Mixed):
+                return O.adjoint_mixed(v)
+            if isinstance(v, sympy.Basic):
+                return P.conjugate(v)
+            raise LangTypeError(f"adj takes an operator, a state or a scalar, got {self._kind(v)}")
+        if isinstance(v, P.Operator):
+            return O.inverse(v, _op_text(node.args[0]))
+        if isinstance(v, sympy.Basic):
+            if v == 0:
+                raise LangTypeError("division by zero")
+            return 1 / v
+        raise LangTypeError(f"inv takes an operator or a scalar, got {self._kind(v)}")
+
+    def _registers(self, node: object, ctx: Ctx) -> list[int]:
+        """Register positions: one position or a list ``{p, q, ...}``, concrete integers."""
+        items = node.items if isinstance(node, SetNode) else (node,)
+        out = []
+        for item in items:
+            v = self._scalar(self._eval_node(item, ctx), "a register position")
+            if not (v.is_Integer and v >= 0):
+                raise LangTypeError(f"a register position is a concrete integer from 0, got {v}")
+            out.append(int(v))
+        if len(set(out)) != len(out):
+            raise LangTypeError("register positions must be distinct")
+        return out
+
+    def _trace(self, node: Call, ctx: Ctx) -> object:
+        if node.name == "keep" and len(node.args) != 2:
+            raise LangTypeError("usage: keep(STATE, R)")
+        if len(node.args) not in (1, 2):
+            raise LangTypeError("usage: tr(X) or tr(X, R)")
+        x = self._eval_node(node.args[0], ctx)
+        try:
+            if len(node.args) == 1:
+                if isinstance(x, (P.State, P.Mixed)):
+                    return O.trace_of(x)
+                if isinstance(x, P.Operator):
+                    layout = self._layout(x)
+                    if layout is None:
+                        raise LangTypeError("tr: cannot tell which registers the operator acts on")
+                    return O.operator_trace(x, [w for w, _ in layout], [d for _, d in layout])
+                raise LangTypeError(
+                    f"tr takes a state, a density matrix or an operator, got {self._kind(x)}"
+                )
+            if not isinstance(x, (P.State, P.Mixed)):
+                raise LangTypeError(
+                    f"{node.name} takes a state or a density matrix, got {self._kind(x)}"
+                )
+            m = O.as_mixed(x)
+            regs = self._registers(node.args[1], ctx)
+            if node.name == "keep":
+                bad = [r for r in regs if r >= m.count]
+                if bad:
+                    raise LangTypeError(
+                        f"register {bad[0]} is out of range; the state has {m.count} "
+                        "register(s), counted from 0"
+                    )
+                regs = [r for r in range(m.count) if r not in regs]
+            if not regs:
+                return m
+            return O.partial_trace(m, regs)
+        except P.PathSumError as exc:
+            raise LangError(str(exc)) from exc
 
     def _special(self, node: Call, ctx: Ctx) -> sympy.Expr:
         args = [
@@ -2703,6 +3063,9 @@ class Interpreter:
             if isinstance(a, P.Operator) and isinstance(b, P.Operator):
                 return P.OpSum((a, b))
             raise LangTypeError(f"cannot add {self._kind(a)} and {self._kind(b)}")
+        if op == "@" and (isinstance(a, _CHANNELS) or isinstance(b, _CHANNELS)):
+            ea, eb = self._as_channel(a), self._as_channel(b)
+            return O.ChannelTensor(f"{ea.name} @ {eb.name}", (ea, eb))
         if op == "@":
             if isinstance(a, P.State) and isinstance(b, P.State):
                 return _flex(P.tensor(a, b), _flags(a) + _flags(b))
@@ -2719,9 +3082,7 @@ class Interpreter:
             raise LangTypeError("^@ applies to a state or an operator")
         if op == "^" and isinstance(a, P.Operator):
             k = self._scalar(b, "an operator power")
-            if not (k.is_Integer and k >= 0):
-                raise LangTypeError("an operator power needs a concrete non-negative integer")
-            return P.Compose((a,) * int(k)) if int(k) else P.Identity()
+            return O.power(a, k)
         if not scalars:
             raise LangTypeError(f"{op} needs scalars, got {self._kind(a)} and {self._kind(b)}")
         if op == "^":
@@ -2731,6 +3092,52 @@ class Interpreter:
         if op == "xor":
             return P.xor(a, b)
         raise LangSyntaxError(f"unknown operator {op}")
+
+
+_CHANNELS = (O.Channel, O.ChannelSeq, O.ChannelTensor, O.ChannelAt)
+_DENS_EVENTS = ("dapply", "pmeasure", "dassign")
+
+
+def _dens_tree(node: object, channels: Mapping[str, object]) -> bool:
+    """Whether ``node`` builds a density matrix by a partial trace, a channel or a recorded
+    density matrix."""
+    if isinstance(node, Call) and node.name in ("tr", "keep") and len(node.args) == 2:
+        return True
+    if isinstance(node, Call) and node.name in _CHANNEL_FUNCS:
+        return True
+    if isinstance(node, Name):
+        return node.id in channels
+    if isinstance(node, Juxt):
+        return _dens_tree(node.left, channels) or _dens_tree(node.right, channels)
+    return False
+
+
+def _op_name(op: P.Operator) -> str:
+    return op.name if isinstance(op, (P.Gate, P.Derived)) else "U"
+
+
+def _partial(node: object) -> bool:
+    """Whether a partial or basis measurement occurs in ``node``."""
+    if isinstance(node, MeasureNode):
+        return node.regs is not None
+    if dataclasses.is_dataclass(node):
+        return any(
+            _partial(v) or (isinstance(v, tuple) and any(_partial(x) for x in v))
+            for v in (getattr(node, f.name) for f in dataclasses.fields(node))
+        )
+    return False
+
+
+def _op_text(node: object) -> str:
+    """The source name of an operator node, or empty."""
+    return node.id if isinstance(node, Name) else ""
+
+
+def _root(op: P.Gate) -> P.Gate:
+    """The gate ``op`` is derived from by adjoints, inverses and powers."""
+    while op.base is not None:
+        op = op.base
+    return op
 
 
 def _power_of_digit(op: P.Operator, s: P.State) -> P.State | None:

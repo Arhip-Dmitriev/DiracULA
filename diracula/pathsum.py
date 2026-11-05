@@ -1191,6 +1191,10 @@ class Gate(Operator):
     oracle: bool = False
     source: str = ""
     checked: set[tuple[int, ...]] = field(default_factory=set)
+    base: Gate | None = None
+    """The gate this one is the adjoint, inverse or power of; it acts on the same registers."""
+    matrix: Callable[[], list[list[Expr]]] | None = None
+    """The entries, row by row, of a gate given by a matrix of concrete size."""
 
 
 @dataclass(frozen=True)
@@ -1245,6 +1249,37 @@ class OpSum(Operator):
     ops: tuple[Operator, ...]
 
 
+@dataclass(frozen=True)
+class Family(Operator):
+    """``sum_bounds op``: ``op`` reads the index symbols of ``bounds``."""
+
+    op: Operator
+    bounds: tuple[Bound, ...]
+
+
+DerivedFn: TypeAlias = Callable[[tuple[Expr, ...], tuple[Expr, ...]], Operator]
+
+
+@dataclass(frozen=True, eq=False)
+class Derived(Operator):
+    """The operator ``build(widths, dims)`` on the registers it is applied to, which it covers
+    as ``like`` does; built once per layout."""
+
+    name: str
+    like: Operator
+    build: DerivedFn
+    cache: dict[tuple[tuple[Expr, ...], tuple[Expr, ...]], Operator] = field(default_factory=dict)
+    collect: bool = False
+    """Whether terms equal up to their summation indices are joined after each application."""
+
+    def at(self, widths: Sequence[Expr], dims: Sequence[Expr]) -> Operator:
+        """The operator on registers of ``widths`` and ``dims``."""
+        key = (tuple(widths), tuple(dims))
+        if key not in self.cache:
+            self.cache[key] = self.build(*key)
+        return self.cache[key]
+
+
 def apply(op: Operator, s: State) -> State:
     """``op |s>`` over all registers of the ket ``s``."""
     if s.bra:
@@ -1252,6 +1287,18 @@ def apply(op: Operator, s: State) -> State:
     token = _SCOPE.set(Params(free_symbols(s))) if _SCOPE.get() is None else None
     try:
         return simplify(_resolved(_apply(op, s, 0, len(s.widths))))
+    finally:
+        if token is not None:
+            _SCOPE.reset(token)
+
+
+def apply_on(op: Operator, s: State, i: int, j: int) -> State:
+    """``op`` on registers ``i..j-1`` of the ket ``s``."""
+    if s.bra:
+        raise PathSumError("operators act on kets; apply to |psi>, not <psi|")
+    token = _SCOPE.set(Params(free_symbols(s))) if _SCOPE.get() is None else None
+    try:
+        return simplify(_resolved(_apply(op, s, i, j)))
     finally:
         if token is not None:
             _SCOPE.reset(token)
@@ -1313,10 +1360,27 @@ def _apply(op: Operator, s: State, i: int, j: int) -> State:
         for r in results[1:]:
             out = add(out, r)
         return out
+    if isinstance(op, Family):
+        with ranged({b.symbol: (b.lo, b.hi) for b in op.bounds}):
+            out = _apply(op.op, s, i, j)
+        return _with(
+            out, terms=[fresh(Term(t.amp, op.bounds + t.bound, t.kets)) for t in out.terms]
+        )
+    if isinstance(op, Derived):
+        if isinstance(op.like, Gate):
+            s, j = _gate_registers(op.like, s, i, j)
+        if any(w is None for w in s.widths[i:j]) or any(d is None for d in s.dims[i:j]):
+            raise PathSumError(f"{op.name}: a register width or dimension is unresolved")
+        ws = tuple(resolve(w) for w in s.widths[i:j])
+        ds = tuple(resolve(d) for d in s.dims[i:j])
+        out = _apply(op.at(ws, ds), s, i, j)
+        return collect(simplify(_resolved(out))) if op.collect else out
     raise PathSumError(f"not an operator: {op!r}")
 
 
-def _apply_gate(g: Gate, s: State, i: int, j: int) -> State:
+def _gate_registers(g: Gate, s: State, i: int, j: int) -> tuple[State, int]:
+    """``s`` and the new end of ``i..j`` with those registers merged or split to the arity of
+    ``g``."""
     if g.arity == 1 and j - i > 1:
         s, j = merge(s, i, j), i + 1
     if j - i < g.arity and same(sympy.Add(*s.widths[i:j]), g.arity):
@@ -1328,6 +1392,11 @@ def _apply_gate(g: Gate, s: State, i: int, j: int) -> State:
             s, j = split(s, r, sympy.S.One), j + 1
     if j - i != g.arity:
         raise PathSumError(f"{g.name} acts on {g.arity} register(s), got {j - i}")
+    return s, j
+
+
+def _apply_gate(g: Gate, s: State, i: int, j: int) -> State:
+    s, j = _gate_registers(g, s, i, j)
     if g.qubit and not all(
         same(w, 1) and same(d, 2) for w, d in zip(s.widths[i:j], s.dims[i:j], strict=True)
     ):
@@ -1419,6 +1488,12 @@ def _apply_power(p: Power, s: State, i: int, j: int) -> State:
     if isinstance(inner_op, Identity):
         return s
     count = sympy.sympify(p.count)
+    if isinstance(inner_op, Derived):
+        d0 = s.dims[i]
+        if d0 is not None:
+            one = inner_op.at((sympy.S.One,), (resolve(d0),))
+            if isinstance(one, Gate) and one.arity == 1:
+                inner_op = one
     if isinstance(inner_op, Gate) and inner_op.arity == 1:
         s = merge(s, i, j)
         width, d = s.widths[i], s.dims[i]
@@ -1466,6 +1541,8 @@ def _span_width(op: Operator) -> Expr | None:
     if isinstance(op, Tensor):
         parts = [_span_width(f) for f in op.factors]
         return None if any(w is None for w in parts) else sympy.Add(*parts)
+    if isinstance(op, (Derived, Family)):
+        return _span_width(op.like if isinstance(op, Derived) else op.op)
     return None
 
 
@@ -1491,6 +1568,10 @@ def _align(
                 end = j
             elif isinstance(f, Gate):
                 end = k + f.arity
+            elif isinstance(f, Derived) and isinstance(f.like, Gate):
+                end = k + f.like.arity
+            elif isinstance(f, Family) and isinstance(f.op, Gate):
+                end = k + f.op.arity
             else:
                 end = k + 1
         else:
@@ -2120,6 +2201,36 @@ def _merge_terms(terms: Sequence[Term], s: State) -> list[Term]:
             continue
         out.append(t)
     return out
+
+
+def collect(s: State) -> State:
+    """``s`` with every set of terms equal up to the names of their summation indices joined,
+    amplitudes added and simplified; zero terms dropped."""
+    out: list[Term] = []
+    keys: dict[tuple[object, ...], int] = {}
+    for t in s.terms:
+        if len(t.bound) > len(_CANON):
+            out.append(t)
+            continue
+        key = _merge_key(t)
+        if key not in keys:
+            keys[key] = len(out)
+            out.append(t)
+            continue
+        first = out[keys[key]]
+        names = {b.symbol: _CANON[k] for k, b in enumerate(t.bound)}
+        back = {_CANON[k]: b.symbol for k, b in enumerate(first.bound)}
+        out[keys[key]] = Term(
+            first.amp + t.amp.xreplace(names).xreplace(back), first.bound, first.kets
+        )
+    terms = []
+    for t in out:
+        amp = tidy(sympy.simplify(t.amp)) if t.amp.is_Add else t.amp
+        if amp != 0:
+            terms.append(Term(amp, t.bound, t.kets))
+    if not terms:
+        terms = [Term(sympy.S.Zero, (), s.terms[0].kets if s.terms else ())]
+    return _with(s, terms=terms)
 
 
 def _merge_key(t: Term) -> tuple[object, ...]:

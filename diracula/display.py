@@ -749,11 +749,13 @@ class Renderer:
             return f"{self._wrap(op.factor)} {self._op_atom(op.op)}"
         if isinstance(op, P.OpSum):
             return " + ".join(self.operator(o) for o in op.ops)
+        if isinstance(op, P.Derived):
+            return op.name
         return repr(op)
 
     def _op_atom(self, op: P.Operator) -> str:
         text = self.operator(op)
-        simple = isinstance(op, (P.Gate, P.Identity, P.Power))
+        simple = isinstance(op, (P.Gate, P.Identity, P.Power, P.Derived))
         return text if simple else f"({text})"
 
     def where(self) -> str | None:

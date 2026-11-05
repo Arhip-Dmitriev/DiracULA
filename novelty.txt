@@ -1,0 +1,85 @@
+DIRACULA: NOVELTY ANALYSIS
+==========================
+
+Compiled 2026-11-04. DiracDec and D-Hammer were read in full; the other entries are from
+abstracts, surveys and search results. The SWTA, CoqQ and Qbricks paper bodies were not read.
+
+
+1. COMPARISON
+-------------
+
+  Columns:
+    n    symbolic number of qudits
+    d    symbolic dimension with computational-basis arithmetic (x mod d, ω^(xy/d), d^n)
+    A    fully automatic
+    C    computes the result (as opposed to checking a given specification or equation)
+    M    machine-checked per result
+
+  Work                                         n        d                     A        C                M
+  -------------------------------------------  -------  --------------------  -------  ---------------  ----------------
+  Amy, path sums / Feynman                     no       no (qubits)           yes      checks equiv.    no
+  Qbricks (parametrised path sums, Why3)       yes      no                    partly   checks spec      yes (Why3)
+  SWTA, POPL'26                                yes      not mentioned         yes      checks spec      not mentioned
+  DiracDec (POPL'25), D-Hammer                 abstract abstract spaces,      yes      decides given    no (future work
+                                               types    no basis arithmetic            equation         in both papers)
+  CoqQ, SQIR (verified Shor), Isabelle         yes      no                    no       proved by hand   yes
+    Marries Dirac
+  Wolfram Quantum Framework, QuAlg,            no       concrete d only       yes      computes         no
+    sympy.physics.quantum
+  Qudit / qufinite ZX(W) calculi               !-boxes  yes, on paper         no tool  -                -
+  DiracULA                                     yes      yes                   yes      computes         yes (Lean, within
+                                                                                                        the certified
+                                                                                                        fragment)
+
+
+2. CANDIDATE NOVELTY, STRONGEST FIRST
+-------------------------------------
+
+  N1  Symbolic d with computational-basis arithmetic (x mod d, ω^(xy/d), registers of d^n
+      levels) in an automated tool. No such tool was found. DiracDec is dimension-independent
+      only for abstract Hilbert spaces and cannot express the mod-d and modular-phase
+      arithmetic of a qudit QFT or of Deutsch-Jozsa with f(x) = x mod d.
+  N2  Forward computation of closed forms. Every automated verifier above checks a
+      user-supplied specification or equation; DiracULA produces the answer.
+  N3  Automatic per-result Lean certificates through a verified normaliser. DiracDec and
+      D-Hammer list certificates as future work; the foundational tools need manual proofs.
+      Holds only within the certified fragment (docs/LEAN.txt, section 10; ALEXANDER_SPEC.txt).
+  N4  Symbolic Born distributions derived automatically for all n and d. Plausibly new;
+      weaker, since the others handle probabilities through manual proofs.
+
+
+3. NOT NOVEL ON THEIR OWN
+-------------------------
+
+  - Path sums (Amy; Qbricks).
+  - Symbolic n (Qbricks, SWTA, CoqQ, SQIR, Isabelle Marries Dirac).
+  - A Dirac-notation language or automated Dirac-notation reasoning (DiracDec, D-Hammer).
+
+The novelty is the combination N1-N3.
+
+
+4. TO VERIFY BEFORE SUBMISSION
+------------------------------
+
+  - SWTA paper body: qudit support and whether it outputs states. The closest work on
+    "fully automatic and parametric".
+  - D-Hammer index layer: whether its index types can carry dimension arithmetic.
+  - CoqQ and Qbricks: qudit or symbolic-dimension support.
+
+
+5. SOURCES
+----------
+
+  DiracDec (Xu, Barthe, Zhou, POPL'25)          https://arxiv.org/abs/2411.11617
+  D-Hammer                                       https://arxiv.org/abs/2505.08633
+  Qbricks                                        https://arxiv.org/abs/2003.05841
+  Amy, path sums                                 https://arxiv.org/abs/1805.06908
+  SWTA parameterized verification (POPL'26)     https://arxiv.org/abs/2511.19897
+  CoqQ                                           https://arxiv.org/abs/2207.11350
+  Verified Shor (SQIR)                           https://arxiv.org/abs/2204.07112
+  Isabelle Marries Dirac                         https://arxiv.org/abs/2012.13925
+  Qufinite ZX                                    https://arxiv.org/abs/2104.06429
+  !-boxes vs scalable notations                  https://arxiv.org/abs/2204.11702
+  Wolfram Quantum Framework                      https://github.com/jacobmarks/quantum_computing
+  QuAlg                                          https://arxiv.org/abs/2008.06467
+  Formal methods survey                          https://arxiv.org/abs/2109.06493

@@ -37,6 +37,34 @@ theorem den_zero_of_pw (V : LV) (t : ATm) (h : ∀ μ, abody V t μ = 0) (ν : �
 
 /-! ## Eliminations -/
 
+/-- `x` summed over one value, read as `0`. -/
+def elimOne (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) : Option AElim :=
+  if D.isConst && D.c == 1 && !(ids ats).contains x then
+    some ⟨CMon.ofQ 1, ats.map (atSub x (ipC 0)), ds.map (facSub x (ipC 0)),
+      ps.map (facSub x (ipC 0))⟩
+  else none
+
+theorem elimOne_ok (V : LV) (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) (e : AElim)
+    (h : elimOne x D ats ds ps = some e) : AElimOK V x D ats ds ps e := by
+  unfold elimOne at h
+  split_ifs at h with hc
+  simp only [Option.some.injEq] at h
+  subst h
+  simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true', List.contains_eq_mem,
+    decide_eq_false_iff_not] at hc
+  obtain ⟨⟨hD, hc1⟩, hx⟩ := hc
+  intro ν
+  have hden : D.den V.ρ.dv = 1 := by rw [DMon.den_isConst _ _ hD, hc1]
+  rw [hden, Finset.sum_range_one, ofQ_den, Rat.cast_one, one_mul, bodyOf_sub, ipDen_C]
+  have hpl : plainP ats (ipC 0) = true := by
+    unfold plainP ipVs ipC ipIns; split_ifs <;> simp
+  have hhs : ipHas x (ipC 0) = false := by
+    unfold ipHas ipC ipIns; split_ifs <;> simp
+  have e := aext_sub V ats x hx (ipC 0) hpl hhs ν
+  rw [ipDen_C] at e
+  rw [← e]
+  rfl
+
 /-! ## Pins to reduced atoms -/
 
 theorem ids_atSub (l : List Atom) (x : ℕ) (v : IPoly) : ids (l.map (atSub x v)) = ids l := by
@@ -178,7 +206,9 @@ def aElimVar (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (
             match elimLinC PW x D ats ds ps with
             | some e => some e
             | none =>
-              elimPinR x D ats ds ps
+              match elimPinR x D ats ds ps with
+              | some e => some e
+              | none => elimOne x D ats ds ps
 
 theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) (e : AElim)
@@ -200,7 +230,10 @@ theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
           · split at h
             · next e' he =>
               simp only [Option.some.injEq] at h; subst h; exact elimLinC_ok V hρ PW hPW _ _ _ _ _ _ he
-            · exact elimPinR_ok V x D ats ds ps e h
+            · split at h
+              · next e' he =>
+                simp only [Option.some.injEq] at h; subst h; exact elimPinR_ok V x D ats ds ps e' he
+              · exact elimOne_ok V x D ats ds ps e h
 
 /-- One elimination of a bound variable, the first that applies. -/
 def aElimStep (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=

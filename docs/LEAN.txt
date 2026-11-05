@@ -147,7 +147,12 @@ The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read a
 A side theorem states that a channel is trace preserving, sum_k K_k^dagger K_k = I, when the
 normaliser proves it. A phase e^(i c t), cos(c t) or sin(c t) of a real symbol t and an
 integer c is read through the coefficient atom z = e^(i t), e^(-i t) as its conjugate atom; the
-theorem then holds for every nonzero z, in particular z = e^(i t).
+theorem then holds for every nonzero z, in particular z = e^(i t). Where the normaliser needs
+|z| = 1, the theorem has the hypothesis z conj(z) = 1 for each such atom, under which the
+exponent of the conjugate atom is moved onto z negated (unitT, certify_unit_c). A real
+parameter p assumed in 0..1 is read as sin^2(a) for an angle a in 0..pi/2 through the atom
+z = e^(i a): sqrt(p) as (z - conj z)/(2 i), sqrt(1 - p) as (z + conj z)/2 and p as
+(2 z conj z - z^2 - conj(z)^2)/4; this certifies depolarize(p), dephase(p) and amp_damp(p).
 Each Lean definition carries the .ula line it translates as a comment.
 
 5. INTEGER ATOMS
@@ -238,6 +243,7 @@ Besides these moves, the normaliser
     periodic modulo D or a delta of a modulus that is a power of D (elimPinU);
   - reads a delta [N ∣ u R - v R] as [d ∣ u - v] for the repunit R = (N - 1)/(d - 1) of
     N = d^m, d dividing N, and atoms u, v reduced modulo d (repDel): R ≡ 1 mod d;
+  - sums a variable of one value as its value 0 (elimOne);
   - orders the atom table canonically, each step the atom of least key among those that read
     no atom left, names the atoms by first occurrence in the factors and then in the table,
     renames bound variables by first occurrence and sorts the sums.
@@ -313,8 +319,6 @@ operators are certified (section 4). The following report "cannot certify":
   - a function of an operator whose spectral form has such amplitudes: exp(i t sum_j Z_j) on a
     symbolic number of qubits (an atom raised to a symbolic power), exp(i t S) of a shift
     (e^(i t w^k)), and the trace closed by the quadratic Gauss sum (tr of a Fourier transform);
-  - a Kraus operator whose amplitude is the root of a symbolic parameter, such as
-    depolarize(p) for a symbolic p; for a concrete parameter it is certified;
   - an explicit matrix whose eigenvalues are radicals (class F4 of LANGUAGE.txt, section 8.8);
   - an operator named by gate G = EXPRESSION is translated through EXPRESSION; an assertion
     between two states or two operators is certified only as a scalar equation, such as

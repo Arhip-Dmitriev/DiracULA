@@ -1079,6 +1079,86 @@ theorem certify_eq_real_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorO
     Prog.sym_ok V hρ fl hfl PW hPW q r hq ν (hi_of q hvq ν fun c h' => hc c
       (List.mem_append_right _ h'))]
 
+/-! ## Unit coefficient atoms -/
+
+/-- `m` with the exponent of atom `2 j + 1` moved, negated, to atom `2 j`. -/
+def unitC (j : ℕ) (m : CMon) : CMon :=
+  CMon.mul { m with am := m.am.set (2 * j + 1) 0 } (CMon.atomP (2 * j) (-(m.am.getD (2 * j + 1) 0)))
+
+theorem unitC_den (ρ : Val) (hρ : ρ.OK) (j : ℕ) (h : ρ.atom (2 * j + 1) = (ρ.atom (2 * j))⁻¹)
+    (m : CMon) : (unitC j m).den ρ = m.den ρ := by
+  unfold unitC
+  rw [CMon.den_mul ρ hρ, atomP_den]
+  conv_rhs => simp only [CMon.den]; rw [zpw_set ρ.atom 0 (2 * j + 1) m.am]
+  simp only [CMon.den, zero_add, h, inv_zpow', zpow_neg]
+  ring
+
+/-- A term with the atoms `2 j`, `j ∈ us`, read as of modulus 1. -/
+def unitT (us : List ℕ) (t : ATm) : ATm :=
+  ⟨us.foldl (fun m j => unitC j m) t.c, t.sums, t.ats, t.dels, t.phs⟩
+
+theorem unitT_den (V : LV) (hρ : V.ρ.OK) (us : List ℕ)
+    (h : ∀ j ∈ us, V.ρ.atom (2 * j + 1) = (V.ρ.atom (2 * j))⁻¹) (t : ATm) (ν : ℕ → ℤ) :
+    (unitT us t).den V ν = t.den V ν := by
+  have hf : ∀ (l : List ℕ) (m : CMon), (∀ j ∈ l, V.ρ.atom (2 * j + 1) = (V.ρ.atom (2 * j))⁻¹) →
+      (l.foldl (fun m j => unitC j m) m).den V.ρ = m.den V.ρ := by
+    intro l
+    induction l with
+    | nil => intro m _; rfl
+    | cons j l ih =>
+      intro m hl
+      simp only [List.foldl_cons]
+      rw [ih _ (fun j hj => hl j (List.mem_cons_of_mem _ hj)),
+        unitC_den V.ρ hρ j (hl j List.mem_cons_self) m]
+  simp only [ATm.den, unitT]
+  rw [hf us t.c h]
+  rfl
+
+theorem axDen_unit (V : LV) (hρ : V.ρ.OK) (us : List ℕ)
+    (h : ∀ j ∈ us, V.ρ.atom (2 * j + 1) = (V.ρ.atom (2 * j))⁻¹) (e : List ATm) (ν : ℕ → ℤ) :
+    axDen V ν (e.map (unitT us)) = axDen V ν e := by
+  simp only [axDen, List.map_map, Function.comp_def, unitT_den V hρ us h]
+
+theorem unit_inv (V : LV) (hρ : V.ρ.OK) (j : ℕ)
+    (h : V.ρ.atom (2 * j) * starRingEnd ℂ (V.ρ.atom (2 * j)) = 1) :
+    V.ρ.atom (2 * j + 1) = (V.ρ.atom (2 * j))⁻¹ := by
+  rw [hρ.aconj]
+  exact (eq_inv_of_mul_eq_one_right h)
+
+/-- `certify_lit_c` with the atoms `2 j`, `j ∈ us`, of modulus 1. -/
+theorem certify_unit_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (us : List ℕ)
+    (hu : ∀ j ∈ us, V.ρ.atom (2 * j) * starRingEnd ℂ (V.ρ.atom (2 * j)) = 1) (p : Prog)
+    (r e : List ATm) (ns : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hn : ((e ++ axNeg r).map (unitT us)).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hv : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, (∀ c ∈ p.counts, 0 ≤ ipDen ν c) → p.sem V ν = axDen V ν r := by
+  intro ν hc
+  have h' : ∀ j ∈ us, V.ρ.atom (2 * j + 1) = (V.ρ.atom (2 * j))⁻¹ := fun j hj =>
+    unit_inv V hρ j (hu j hj)
+  have hz' := nfA_zero V hρ fl hfl PW hPW _ (by rw [nfA_of_lit fl PW _ ns hn, hz]) ν
+  rw [axDen_unit V hρ us h', axDen_append, axDen_neg] at hz'
+  rw [Prog.sym_ok V hρ fl hfl PW hPW p e he ν (hi_of p hv ν hc)]
+  linear_combination hz'
+
+/-- `certify_eq_lit_c` with the atoms `2 j`, `j ∈ us`, of modulus 1. -/
+theorem certify_eq_unit_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (us : List ℕ)
+    (hu : ∀ j ∈ us, V.ρ.atom (2 * j) * starRingEnd ℂ (V.ρ.atom (2 * j)) = 1) (p q : Prog)
+    (e r : List ATm) (ns : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hq : q.sym fl PW = some r)
+    (hn : ((e ++ axNeg r).map (unitT us)).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hvp : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v)
+    (hvq : ∀ c ∈ q.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, (∀ c ∈ p.counts ++ q.counts, 0 ≤ ipDen ν c) → p.sem V ν = q.sem V ν := by
+  intro ν hc
+  rw [certify_unit_c V hρ fl hfl PW hPW us hu p r e ns he hn hz hvp ν
+    (fun c h' => hc c (List.mem_append_left _ h')),
+    Prog.sym_ok V hρ fl hfl PW hPW q r hq ν (hi_of q hvq ν fun c h' => hc c
+      (List.mem_append_right _ h'))]
+
 /-! ## Operators on inputs in range -/
 
 /-- `certify_lit` at every valuation whose variables of `rg` lie in their ranges. -/

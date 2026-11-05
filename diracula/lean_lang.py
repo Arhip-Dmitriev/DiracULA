@@ -484,6 +484,8 @@ class Vars:
     catoms: list[sympy.Symbol] = field(default_factory=list)
     angle_atoms: dict[sympy.Symbol, sympy.Symbol] = field(default_factory=dict)
     """The atom ``e^(i t)`` of each real angle symbol ``t``."""
+    unit_params: set[sympy.Symbol] = field(default_factory=set)
+    """The real parameters assumed in ``0..1``, each read as ``sin^2`` of an angle."""
     anchors: dict[tuple[sympy.Expr, sympy.Symbol], int] = field(default_factory=dict)
     funcs: list[str] = field(default_factory=list)
     needs_width: bool = False
@@ -872,7 +874,7 @@ class Vars:
     def amp(self, amp: sympy.Expr) -> list[tuple[Y.CMon, list[Y.Fac], list[Y.Fac]]]:
         """An amplitude as terms: a coefficient, deltas and roots of unity."""
         out = []
-        amp = self.angles(sympy.sympify(amp))
+        amp = self.angles(self.unit_param(sympy.sympify(amp)))
         expanded = sympy.expand(amp, log=False, power_exp=False, power_base=False)
         for term in sympy.Add.make_args(expanded):
             if term == 0:
@@ -896,6 +898,33 @@ class Vars:
             and x not in self.dsyms
             and x not in self.angle_atoms.values()
         ]
+
+    def unit_param(self, e: sympy.Expr) -> sympy.Expr:
+        """``e`` with each parameter ``p`` of :attr:`unit_params` read as ``sin^2(a)`` of an angle
+        ``a`` in ``0..pi/2``, through the atom ``z = e^(i a)``: ``sqrt(p) = (z - conj z)/(2 i)``,
+        ``sqrt(1 - p) = (z + conj z)/2`` and ``p = (2 z conj z - z^2 - conj(z)^2)/4``."""
+        hit = [q for q in self.unit_params if q in e.free_symbols]
+        if not hit:
+            return e
+        for q in hit:
+            z = self.angle_atoms.setdefault(
+                sympy.Symbol(f"asin(sqrt({q.name}))", real=True),
+                sympy.Symbol(f"e^(i*asin(sqrt({q.name})))", complex=True),
+            )
+            zc = sympy.conjugate(z)
+            sin, cos = (z - zc) / (2 * sympy.I), (z + zc) / 2
+            e = e.replace(
+                lambda f, q=q: f.is_Pow and f.exp == sympy.Rational(1, 2) and f.base == q,
+                lambda f, sin=sin: sin,
+            )
+            e = e.replace(
+                lambda f, q=q: (
+                    f.is_Pow and f.exp == sympy.Rational(1, 2) and sympy.expand(f.base - 1 + q) == 0
+                ),
+                lambda f, cos=cos: cos,
+            )
+            e = e.xreplace({q: (2 * z * zc - z**2 - zc**2) / 4})
+        return e
 
     def angles(self, e: sympy.Expr) -> sympy.Expr:
         """``e`` with ``e^(i c t)``, ``cos(c t)`` and ``sin(c t)`` of a real symbol ``t`` and an
@@ -1635,6 +1664,9 @@ class Certifier:
         self.ctx_used = False
         self.real_rs: list[int] = []
         self.real_any: list[int] = []
+        self.real_kind = "real"
+        """Whether the atoms of ``real_rs`` are real or of modulus 1."""
+        self.unit_any: list[int] = []
         self.gate_layouts: dict[object, Layout] = {}
         self.rounds = 1
         self.nfs2: list[ATm | None] = []
@@ -1659,6 +1691,8 @@ class Certifier:
     def kind(self, node: object) -> str:
         from diracula import lang as L
 
+        if isinstance(node, (L.MatrixNode, L.MatrixFor)):
+            return "op"
         if isinstance(node, L.Name):
             if node.id in self.aliases:
                 return "op"
@@ -2021,6 +2055,10 @@ class Certifier:
             return self.ident(lay), lay
         if isinstance(node, L.Name) and node.id in self.aliases:
             return self.op(self.aliases[node.id], lay)
+        if isinstance(node, (L.MatrixNode, L.MatrixFor)):
+            self.anon = getattr(self, "anon", 0) + 1
+            name = f"matrix_{self.anon}"
+            return self.matrix_gate(name, GateTree((), node, name), lay)
         if isinstance(node, L.Name):
             return self.gate(node.id, lay)
         if isinstance(node, L.Bin) and node.op == "@":
@@ -2242,7 +2280,12 @@ class Certifier:
             return self.matrix_gate(name, tree, lay)
         if len(tree.slots) != len(lay[0]):
             raise CertifyError(f"{name} acts on {len(tree.slots)} register(s), got {len(lay[0])}")
-        key = ("gate", name, lay)
+        key: Any = ("gate", name, lay)
+        if name.startswith("_"):
+            bound = tuple(
+                sorted((k, v) for k, v in self.reader.values.items() if isinstance(v, sympy.Dummy))
+            )
+            key = ("gate", name, lay, bound)
         loc = {}
         for i, ((q, want), w, d) in enumerate(zip(tree.slots, *lay, strict=True)):
             if want is not None and sympy.expand(self.reader.scalar(self.parse(want), {}) - d) != 0:
@@ -2292,6 +2335,10 @@ class Certifier:
         """A matrix gate on one register as the kernel ``Σ_{i,j} M_ij [o = i][in = j]``."""
         if len(lay[0]) != 1:
             raise CertifyError(f"the matrix gate {name} on several registers")
+        from diracula import lang as L
+
+        if isinstance(tree.body, L.MatrixFor):
+            return self.matrix_for(name, tree, lay)
         rows = [[self.reader.scalar(e, {}) for e in row] for row in tree.body.rows]  # type: ignore[attr-defined]
         w, d = lay[0][0], lay[1][0]
         if sympy.expand(d**w - len(rows)) != 0:
@@ -2309,6 +2356,31 @@ class Certifier:
             if a != 0
         )
         k = Ket((w,), (d,), terms or ((sympy.Integer(0), (), (sympy.Integer(0),)),))
+        p = Prog("leaf", (ket_terms(self.vs, k),))
+        return self.declare(key, f"gate_{_clean(name)}", f"gate {name} = {tree.source}", p), lay
+
+    def matrix_for(self, name: str, tree: GateTree, lay: Layout) -> tuple[Prog, Layout]:
+        """A matrix comprehension on one register as the kernel ``Σ_r body(r, in) [o = r]``."""
+        node = cast(Any, tree.body)
+        w, d = lay[0][0], lay[1][0]
+        lo = self.reader.scalar(node.lo, {})
+        hi = self.reader.scalar(node.hi, {}) + (1 if node.inclusive else 0)
+        if lo != 0 or sympy.expand(d**w - hi) != 0:
+            raise CertifyError(f"the matrix {name} on a register of {d**w} levels")
+        key = ("gate", name, lay)
+        if key in self.done:
+            return self.done[key], lay
+        s = sympy.Dummy("in", integer=True)
+        self.vs.ids[s] = IN
+        self.vs.ranges[IN] = d**w
+        r = sympy.Dummy(node.row, integer=True)
+        saved = self.reader.values
+        self.reader.values = {**saved, node.row: r, node.col: s}
+        try:
+            amp = self.reader.scalar(node.body, {})
+        finally:
+            self.reader.values = saved
+        k = Ket((w,), (d,), ((amp, ((r, d**w),), (r,)),))
         p = Prog("leaf", (ket_terms(self.vs, k),))
         return self.declare(key, f"gate_{_clean(name)}", f"gate {name} = {tree.source}", p), lay
 
@@ -2770,27 +2842,30 @@ class Certifier:
     def builtin_kraus(self, node: Any, lay: Layout) -> object:
         """The Kraus operators of a built-in channel as a tree, for a concrete parameter."""
         par = self.reader.scalar(node.args[0], {})
-        if par.free_symbols:
+        if par.free_symbols and not (isinstance(par, sympy.Symbol) and par in self.vs.unit_params):
             raise CertifyError(
-                f"{node.name}({par}): the Kraus amplitude sqrt(1 - {par}) of a symbolic "
-                "parameter is outside the certified amplitudes"
+                f"{node.name}({par}): the Kraus amplitude sqrt(1 - {par}) of a parameter not "
+                "assumed in 0..1"
             )
         if len(lay[0]) != 1:
             raise CertifyError(f"{node.name} on several registers")
         d = f"({sympy.sstr(lay[1][0] ** lay[0][0])})"
         q = f"({sympy.sstr(par)})"
-        text = {
-            "depolarize": (
-                f"{{sqrt(1 - {q}) I, sum(a in 0..{d}){{ sum(b in 0..{d}){{ sqrt({q})/{d} "
-                f"matrix(r, c in 0..{d}){{ ifelse(r == (c + a) % {d}, 1, 0) "
-                f"* e^(2*pi*i*b*c/{d}) }} }} }} }}"
-            ),
-            "dephase": f"{{sqrt(1 - {q}) I, sum(k in 0..{d}){{ sqrt({q}) |k>_{d}<k|_{d} }}}}",
-            "amp_damp": (
+        if node.name == "depolarize":
+            dim = sympy.sstr(lay[1][0])
+            body = self.parse(f"e^(2*pi*i*b*x/{d}) |(x + a) % {d}>_{d}")
+            self.trees = {**self.trees, "_pauli": GateTree((("x", dim),), body, "X^a Z^b")}
+            text = (
+                f"{{sqrt(1 - {q}) I, sum(a in 0..{d}){{ sum(b in 0..{d}){{ "
+                f"sqrt({q})/{d} _pauli }} }} }}"
+            )
+        elif node.name == "dephase":
+            text = f"{{sqrt(1 - {q}) I, sum(k in 0..{d}){{ sqrt({q}) |k>_{d}<k|_{d} }}}}"
+        else:
+            text = (
                 f"{{sqrt(1 - {q}) I + (1 - sqrt(1 - {q})) |0>_{d}<0|_{d}, "
-                f"sum(j in 0..{d}){{ sqrt({q}) (1 - ifelse(j == 0, 1, 0)) |0>_{d}<j|_{d} }}}}"
-            ),
-        }[node.name]
+                f"sum(j in 0..{d} - 1){{ sqrt({q}) |0>_{d}<j + 1|_{d} }}}}"
+            )
         return self.parse(text)
 
     def trace_preserving(self, name: str, tree: object, lay: Layout) -> None:
@@ -2991,6 +3066,7 @@ class Certifier:
 
     def setup(self, upto: int) -> None:
         self.upto = upto
+        self.vs.unit_params = self.unit_ranged()
         for ev in self.log:
             if isinstance(ev.value, State):
                 for w, d in zip(ev.value.widths, ev.value.dims, strict=True):
@@ -3041,6 +3117,21 @@ class Certifier:
             else 2
             for s in self.vs.dsyms
         ]
+
+    def unit_ranged(self) -> set[sympy.Symbol]:
+        """The real parameters assumed at least 0 and at most 1."""
+        lo: set[sympy.Symbol] = set()
+        hi: set[sympy.Symbol] = set()
+        for fact in getattr(self, "assumptions", []):
+            for rel in (fact, getattr(fact, "reversed", fact)):
+                x = getattr(rel, "lhs", None)
+                if not (isinstance(x, sympy.Symbol) and x.is_real and not x.is_integer):
+                    continue
+                if isinstance(rel, sympy.GreaterThan) and rel.rhs == 0:
+                    lo.add(x)
+                if isinstance(rel, sympy.LessThan) and rel.rhs == 1:
+                    hi.add(x)
+        return lo & hi
 
     def width_low(self, n: sympy.Symbol) -> int | None:
         """The greatest lower bound ``L`` of the width ``n`` an assumption states, or None."""
@@ -3112,6 +3203,7 @@ class Certifier:
             self.ctx_used = ok
             self.ctx_any = self.ctx_any or ok
         self.real_rs = []
+        self.real_kind = "real"
         rs = [k for k, c in enumerate(self.vs.catoms) if c.is_integer]
         if not ok and rs:
             e0 = prog_sym(p, self.floors(), self.vs.pw)
@@ -3120,13 +3212,23 @@ class Certifier:
             ):
                 ok, self.real_rs, self.ctx_used, self.rounds = True, rs, False, 1
                 self.real_any = sorted(set(self.real_any) | set(rs))
+        us = [k for k, c in enumerate(self.vs.catoms) if c in self.vs.angle_atoms.values()]
+        if not ok and us:
+            e0 = prog_sym(p, self.floors(), self.vs.pw)
+            if e0 is not None and not Z.nf_a(
+                self.floors(), self.vs.pw, [Z.unit_t(us, t) for t in e0 + Z.ax_neg(rhs)]
+            ):
+                ok, self.real_rs, self.ctx_used, self.rounds = True, us, False, 1
+                self.real_kind = "unit"
+                self.unit_any = sorted(set(self.unit_any) | set(us))
         if not ok:
             raise CertifyError("the normaliser does not close the difference")
         e = prog_sym(p, self.floors(), self.vs.pw)
         assert e is not None
         fl, pw = self.floors(), self.vs.pw
         if self.real_rs:
-            ns0 = [Z.real_t(self.real_rs, t) for t in e + Z.ax_neg(rhs)]
+            conj_t = Z.unit_t if self.real_kind == "unit" else Z.real_t
+            ns0 = [conj_t(self.real_rs, t) for t in e + Z.ax_neg(rhs)]
             self.sym, self.nfs, self.nfs2 = e, [Z.norm_a(fl, pw, Z.AROUNDS, t) for t in ns0], []
             return []
         e2 = Z.x_pass(self.ctx(), e) if self.ctx_used else e
@@ -3188,10 +3290,14 @@ class Certifier:
             " ".join(f"h_ν{v}" for v, _ in hyps),
         )
 
+    def rs_names(self) -> str:
+        return "US USOK" if self.real_kind == "unit" else "RS RSOK"
+
     def lit_proof(self, p: Prog, r: str, k: str) -> str:
         if self.real_rs:
             return (
-                f"certify_real_c V hρ FL FLOK PW PWOK RS RSOK {p.name} {r} SYM{k} NF{k} " + DECIDES
+                f"certify_{self.real_kind}_c V hρ FL FLOK PW PWOK {self.rs_names()} {p.name} {r} "
+                f"SYM{k} NF{k} " + DECIDES
             )
         if self.ctx_used:
             _, names = self.wl_intro()
@@ -3568,7 +3674,8 @@ class Certifier:
                 f"→ {pl.name}.sem V ν = {pr.name}.sem V ν"
             )
             proof = (
-                f"certify_eq_real_c V hρ FL FLOK PW PWOK RS RSOK {pl.name} {pr.name} SYM RSYM NF "
+                f"certify_eq_{self.real_kind}_c V hρ FL FLOK PW PWOK {self.rs_names()} "
+                f"{pl.name} {pr.name} SYM RSYM NF "
                 + DECIDES
                 + " (by decide +kernel) (by decide +kernel)"
             )
@@ -4197,6 +4304,20 @@ class Certifier:
                 "(fun j hj => by simp only [RS, List.mem_cons, List.not_mem_nil, or_false] at hj; "
                 f"rcases hj with {pats} <;> assumption)"
             )
+        usok = ""
+        if self.unit_any:
+            for k in self.unit_any:
+                c = f"V.ρ.atom {2 * k}"
+                hyps.append((f"h_un_{_clean(vs.catoms[k].name)}", f"{c} * starRingEnd ℂ ({c}) = 1"))
+            pats = " | ".join(["rfl"] * len(self.unit_any))
+            rs_lines.append(
+                "/-- The coefficient atoms of angles, of modulus 1. -/\n"
+                f"def US : List ℕ := {lean_nats(self.unit_any)}\n"
+            )
+            usok = (
+                "(fun j hj => by simp only [US, List.mem_cons, List.not_mem_nil, or_false] at hj; "
+                f"rcases hj with {pats} <;> assumption)"
+            )
         hyp_text = " ".join(f"({a} : {b})" for a, b in hyps)
         args_text = " ".join(a for a, _ in hyps)
         fl_cases = []
@@ -4349,6 +4470,7 @@ class Certifier:
                 f"    {st} :=",
                 "  "
                 + pr.replace("RSOK", rsok)
+                .replace("USOK", usok)
                 .replace("FLOK", flok)
                 .replace("PWOK", pwok)
                 .replace("CTXOK", ctxok)

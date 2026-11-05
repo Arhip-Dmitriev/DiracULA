@@ -374,7 +374,25 @@ def a_elim_var(
     e = elim_lin_c(pw, x, d, ats, ds, ps)
     if e is not None:
         return e
-    return elim_pin_r(x, d, ats, ds, ps)
+    e = elim_pin_r(x, d, ats, ds, ps)
+    if e is not None:
+        return e
+    return elim_one(x, d, ats, ds, ps)
+
+
+def elim_one(
+    x: int, d: Y.DMon, ats: tuple[Atom, ...], ds: tuple[Y.Fac, ...], ps: tuple[Y.Fac, ...]
+) -> AElim | None:
+    """``elimOne``."""
+    if not (Y.dm_const(d) and d[0] == 1 and x not in ids(ats)):
+        return None
+    v = Y.ip_c(0)
+    return (
+        Y.of_q(1),
+        tuple(at_sub(x, v, t) for t in ats),
+        tuple(Y.fac_sub(x, v, g) for g in ds),
+        tuple(Y.fac_sub(x, v, g) for g in ps),
+    )
 
 
 def elim_pin_u1(
@@ -1797,6 +1815,23 @@ def real_t(rs: Sequence[int], t: ATm) -> ATm:
     c = t[0]
     for j in rs:
         c = real_c(j, c)
+    return (c, t[1], t[2], t[3], t[4])
+
+
+def unit_c(j: int, m: Y.CMon) -> Y.CMon:
+    """``unitC``."""
+    am = list(m[4])
+    c = am[2 * j + 1] if 2 * j + 1 < len(am) else 0
+    if 2 * j + 1 < len(am):
+        am[2 * j + 1] = 0
+    return Y.cm_mul((m[0], m[1], m[2], m[3], tuple(am), m[5]), Y.atom_p(2 * j, -c))
+
+
+def unit_t(us: Sequence[int], t: ATm) -> ATm:
+    """``unitT``."""
+    c = t[0]
+    for j in us:
+        c = unit_c(j, c)
     return (c, t[1], t[2], t[3], t[4])
 
 

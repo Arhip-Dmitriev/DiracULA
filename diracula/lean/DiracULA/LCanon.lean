@@ -37,6 +37,126 @@ theorem den_zero_of_pw (V : LV) (t : ATm) (h : ∀ μ, abody V t μ = 0) (ν : �
 
 /-! ## Eliminations -/
 
+/-! ## Pins to reduced atoms -/
+
+theorem ids_atSub (l : List Atom) (x : ℕ) (v : IPoly) : ids (l.map (atSub x v)) = ids l := by
+  induction l with
+  | nil => rfl
+  | cons a l ih => simp only [List.map_cons, ids] at ih ⊢; simp [atSub, ih]
+
+/-- `x` pinned by `f = [D ∣ s x + b]`, `s = ±1`, `b` reading no atom, to the new atom
+`u = mod(-s b, D)`, whatever else reads `x`. -/
+def elimPinU1 (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (pre : List Fac)
+    (f : Fac) (post ps : List Fac) (u : ℕ) : Option AElim :=
+  match ipLin x f.2 with
+  | some (a, b) =>
+    match ipConst a with
+    | some s =>
+      if (s == 1 || s == -1) && D.c != 0 && decide (f.1 = D) && !(ids ats).contains x &&
+          plainP ats b && !(ids ats).contains u && !(argVs ats).contains u &&
+          !((pre ++ post ++ ps).flatMap facVars).contains u && !(ipVs b).contains u &&
+          decide (u ≠ x) && ps.all (fun g => !facHas x g || g.1.dvd f.1) &&
+          (pre ++ post).all (fun g => !facHas x g || g.1.dvd f.1 || PW.contains (f.1, g.1)) then
+        some ⟨CMon.ofQ 1, ⟨u, 2, [], [], [(pinVal s b, D)]⟩ :: ats.map (atSub x (ipV u)),
+          (pre ++ post).map (facSub x (ipV u)), ps.map (facSub x (ipV u))⟩
+      else none
+    | none => none
+  | none => none
+
+/-- A variable greater than every variable the atoms and factors name. -/
+def freshU (x : ℕ) (ats : List Atom) (ds ps : List Fac) : ℕ :=
+  (x :: ids ats ++ argVs ats ++ (ds ++ ps).flatMap facVars).foldr max 0 + 1
+
+/-- `x` pinned to a new reduced atom by the first delta of its range that pins it. -/
+def elimPinU (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) :
+    Option AElim :=
+  firstSome (fun p => elimPinU1 PW x D ats p.1 p.2.1 p.2.2 ps (freshU x ats ds ps)) (splits ds)
+
+theorem ipHas_of_facVars (u : ℕ) (g : Fac) (h : u ∉ facVars g) : ipHas u g.2 = false := by
+  simp only [ipHas, List.any_eq_false, List.contains_eq_mem, decide_eq_true_eq]
+  intro t ht hu
+  exact h (by simp only [facVars, List.mem_flatMap]; exact ⟨t, ht, hu⟩)
+
+theorem bodyOf_upd_free (dv : ℕ → ℕ) (ds ps : List Fac) (u : ℕ)
+    (h : ∀ g ∈ ds ++ ps, ipHas u g.2 = false) (μ : ℕ → ℤ) (w : ℤ) :
+    bodyOf dv ds ps (Function.update μ u w) = bodyOf dv ds ps μ := by
+  simp only [bodyOf]
+  congr 1
+  · congr 1; refine List.map_congr_left fun g hg => ?_
+    unfold delV; rw [ipDen_upd_of _ _ _ _ (h g (List.mem_append_left _ hg))]
+  · congr 1; refine List.map_congr_left fun g hg => ?_
+    unfold phV; rw [ipDen_upd_of _ _ _ _ (h g (List.mem_append_right _ hg))]
+
+theorem elimPinU1_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (x : ℕ) (D : DMon)
+    (ats : List Atom) (pre : List Fac) (f : Fac) (post ps : List Fac) (u : ℕ) (e : AElim)
+    (h : elimPinU1 PW x D ats pre f post ps u = some e) : AElimOK V x D ats (pre ++ f :: post) ps e := by
+  unfold elimPinU1 at h
+  split at h
+  · next a b hlin =>
+    split at h
+    · next s hs =>
+      split_ifs at h with hc
+      simp only [Option.some.injEq] at h
+      subst h
+      simp only [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, bne_iff_ne, ne_eq,
+        Bool.not_eq_true', List.contains_eq_mem, decide_eq_false_iff_not, decide_eq_true_eq] at hc
+      obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hs1, hD⟩, hf⟩, hxid⟩, hbp⟩, huid⟩, huarg⟩, hufac⟩, hub⟩, hux⟩, -⟩, -⟩ := hc
+      obtain ⟨-, hb, hp⟩ := ipLin_spec x f.2 a b hlin
+      have hsv : ∀ ν, ipDen ν a = s := fun ν => ipConst_spec a s hs ν
+      have hDpos : 0 < D.den V.ρ.dv := DMon.den_pos _ hρ.dpos _ (Nat.pos_of_ne_zero hD)
+      intro ν
+      set v : ℤ := -s * ipDen ν b
+      set g : ℤ → ℂ := fun j => bodyOf V.ρ.dv (pre ++ post) ps (aext V ats (Function.update ν x j))
+      have hsplit : ∀ j : ℤ, bodyOf V.ρ.dv (pre ++ f :: post) ps (aext V ats (Function.update ν x j)) =
+          (if ((D.den V.ρ.dv : ℕ) : ℤ) ∣ j - v then g j else 0) := by
+        intro j
+        have hd : delV V.ρ.dv (aext V ats (Function.update ν x j)) f =
+            if ((D.den V.ρ.dv : ℕ) : ℤ) ∣ j - v then 1 else 0 := by
+          unfold delV
+          rw [hp, hsv, ipDen_aext V ats b hbp, ipDen_upd_of _ _ _ _ hb, aext_off V ats _ x hxid,
+            Function.update_self, hf]
+          simp only [pin_dvd s hs1, v]
+        simp only [g, bodyOf, List.map_append, List.map_cons, List.prod_append, List.prod_cons, hd]
+        split_ifs <;> ring
+      rw [Finset.sum_congr rfl fun (j : ℕ) _ => hsplit (j : ℤ), sum_pin_exact _ hDpos v g,
+        ofQ_den, Rat.cast_one, one_mul]
+      -- the right side
+      set w : ℤ := v % ((D.den V.ρ.dv : ℕ) : ℤ)
+      have haval : aval V ν ⟨u, 2, [], [], [(pinVal s b, D)]⟩ = w := by
+        simp only [aval, show (2 : ℕ) < 100 by norm_num, if_true, bfn, List.map_cons, List.map_nil,
+          argV, List.getD_cons_zero, pinVal, ipDen_smul, w, v]
+      simp only [aext]
+      rw [haval]
+      set μ := Function.update ν u w
+      have hidu : u ∉ ids (ats.map (atSub x (ipV u))) := by rw [ids_atSub]; exact huid
+      have hμu : μ u = w := by simp [μ]
+      rw [bodyOf_sub, ipDen_V, aext_off V _ _ u hidu, hμu]
+      have hvp : plainP ats (ipV u) = true := by simp [plainP, ipVs, ipV, huid]
+      have hvx : ipHas x (ipV u) = false := by simp [ipHas, ipV]; exact Ne.symm hux
+      have e2 := aext_sub V ats x hxid (ipV u) hvp hvx μ
+      rw [ipDen_V, hμu] at e2
+      rw [← e2]
+      simp only [g, μ]
+      have hfree : ∀ g' ∈ (pre ++ post) ++ ps, ipHas u g'.2 = false := by
+        intro g' hg'
+        apply ipHas_of_facVars
+        intro hm
+        apply hufac
+        simp only [List.mem_flatMap]
+        exact ⟨g', by simpa using hg', hm⟩
+      have hnu : u ∉ argVs ats ++ ids ats := by
+        simp only [List.mem_append, not_or]; exact ⟨huarg, huid⟩
+      rw [Function.update_comm hux, aext_upd V ats u hnu _ w, bodyOf_upd_free _ _ _ u hfree]
+    · simp at h
+  · simp at h
+
+theorem elimPinU_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (x : ℕ) (D : DMon)
+    (ats : List Atom) (ds ps : List Fac) (e : AElim) (h : elimPinU PW x D ats ds ps = some e) :
+    AElimOK V x D ats ds ps e := by
+  obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h
+  rw [splits_spec ds p hp]
+  exact elimPinU1_ok V hρ PW x D ats _ _ _ _ _ e he
+
 /-- The first elimination of `x` that applies. -/
 def aElimVar (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) :
     Option AElim :=
@@ -57,7 +177,8 @@ def aElimVar (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (
           | none =>
             match elimLinC PW x D ats ds ps with
             | some e => some e
-            | none => elimPinR x D ats ds ps
+            | none =>
+              elimPinR x D ats ds ps
 
 theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) (e : AElim)
@@ -112,6 +233,38 @@ theorem aElimStep_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : 
     ring
   · simp at he
 
+
+/-- One pin of a bound variable to a new reduced atom, the first that applies. -/
+def aElimStepU (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
+  firstSome (fun p => if (p.1 ++ p.2.2).map (·.1) |>.contains p.2.1.1 then none else
+    match elimPinU PW p.2.1.1 p.2.1.2 t.ats t.dels t.phs with
+    | some e => some ⟨CMon.mul t.c e.k, p.1 ++ p.2.2, e.ats, e.ds, e.ps⟩
+    | none => none) (splits t.sums)
+
+theorem aElimStepU_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (t t' : ATm)
+    (h : aElimStepU PW t = some t')
+    (ν : ℕ → ℤ) : t'.den V ν = t.den V ν := by
+  obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h
+  obtain ⟨a, ⟨x, D⟩, b⟩ := p
+  simp only at he
+  split_ifs at he with hx
+  split at he
+  · next e hev =>
+    simp only [Option.some.injEq] at he
+    subst he
+    have hok := elimPinU_ok V hρ PW x D t.ats t.dels t.phs e hev
+    have hs := splits_spec t.sums _ hp
+    simp only at hs
+    unfold ATm.den
+    rw [hs, sumsV_pull _ a b x D (by simpa using hx)]
+    show (CMon.mul t.c e.k).den V.ρ * sumsV V.ρ.dv (a ++ b)
+        (fun μ => bodyOf V.ρ.dv e.ds e.ps (aext V e.ats μ)) ν =
+      t.c.den V.ρ * sumsV V.ρ.dv (a ++ b) (fun ν' => ∑ j ∈ range (D.den V.ρ.dv),
+        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j))) ν
+    rw [sumsV_congr _ _ _ (fun ν' => e.k.den V.ρ * bodyOf V.ρ.dv e.ds e.ps (aext V e.ats ν'))
+      hok, sumsV_mul_left, CMon.den_mul V.ρ hρ]
+    ring
+  · simp at he
 
 /-! ## Factors -/
 
@@ -966,11 +1119,6 @@ def xPin (t : ATm) : Option ATm :=
     (fun r => xPin1 t p.1 p.2.2 p.2.1.1 p.2.1.2 q.1 q.2.1 q.2.2 r.1 r.2.1.1 r.2.1.2 r.2.2)
     (splits (p.1 ++ p.2.2))) (splits t.dels)) (splits t.sums)
 
-theorem ids_atSub (l : List Atom) (x : ℕ) (v : IPoly) : ids (l.map (atSub x v)) = ids l := by
-  induction l with
-  | nil => rfl
-  | cons a l ih => simp only [List.map_cons, ids] at ih ⊢; simp [atSub, ih]
-
 theorem dvd_range_eq (N : ℕ) (j k : ℕ) (hj : j < N) (hk : k < N)
     (h : ((N : ℕ) : ℤ) ∣ (j : ℤ) - (k : ℤ)) : j = k := by
   have h0 := Int.eq_zero_of_abs_lt_dvd h (by rw [abs_lt]; constructor <;> omega)
@@ -1051,7 +1199,9 @@ theorem xPin_ok (V : LV) (t t' : ATm) (h : xPin t = some t') (ν : ℕ → ℤ) 
     | some t' => aElimAll PW n t'
     | none => match xPin (aRules (t.ats.length + 1) t) with
       | some t' => aElimAll PW n t'
-      | none => t
+      | none => match aElimStepU PW (aRules (t.ats.length + 1) t) with
+        | some t' => aElimAll PW n t'
+        | none => t
 
 theorem aElimAll_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (n : ℕ) (t : ATm) (ν : ℕ → ℤ) : (aElimAll PW n t).den V ν = t.den V ν := by
@@ -1065,7 +1215,10 @@ theorem aElimAll_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
     · split
       · next t' h =>
         rw [ih, xPin_ok V _ t' h, (aRules_ok V (t.ats.length + 1) t).den]
-      · rfl
+      · split
+        · next t' h =>
+          rw [ih, aElimStepU_ok V hρ PW _ t' h, (aRules_ok V (t.ats.length + 1) t).den]
+        · rfl
 
 /-- Deltas reading digit conditions rewritten, when the table's variables are distinct. -/
 def dzStep (PW : List (DMon × DMon)) (t : ATm) : ATm :=
@@ -1188,12 +1341,142 @@ theorem modDropAt_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl 
     · congr 1; exact List.map_congr_left fun g hg => (hcong g (List.mem_append_right _ hg)).2
   · simp at h
 
+/-! ## Repunit deltas -/
+
+theorem geom_one_add (D m : ℕ) (hD : 2 ≤ D) (hm : 1 ≤ m) :
+    ∃ K : ℕ, (D ^ m - 1) / (D - 1) = 1 + D * K := by
+  obtain ⟨k, rfl⟩ : ∃ k, m = k + 1 := ⟨m - 1, by omega⟩
+  rw [← Nat.geomSum_eq hD, Finset.sum_range_succ']
+  refine ⟨∑ i ∈ range k, D ^ i, ?_⟩
+  rw [Finset.mul_sum]
+  simp only [pow_succ, pow_zero]
+  rw [add_comm]
+  congr 1
+  exact Finset.sum_congr rfl fun i _ => by ring
+
+theorem rep_dvd (D m : ℕ) (hD : 2 ≤ D) (hm : 1 ≤ m) (p q : ℤ) (hp0 : 0 ≤ p) (hp1 : p < D)
+    (hq0 : 0 ≤ q) (hq1 : q < D) :
+    ((D ^ m : ℕ) : ℤ) ∣ p * (((D ^ m - 1) / (D - 1) : ℕ) : ℤ) - q * (((D ^ m - 1) / (D - 1) : ℕ) : ℤ) ↔
+      (D : ℤ) ∣ p - q := by
+  obtain ⟨K, hK⟩ := geom_one_add D m hD hm
+  rw [hK]
+  constructor
+  · intro h
+    have hDm : (D : ℤ) ∣ ((D ^ m : ℕ) : ℤ) := by
+      obtain ⟨k, rfl⟩ : ∃ k, m = k + 1 := ⟨m - 1, by omega⟩
+      exact ⟨((D ^ k : ℕ) : ℤ), by push_cast; ring⟩
+    have h2 := hDm.trans h
+    have e : p * (((1 + D * K : ℕ)) : ℤ) - q * (((1 + D * K : ℕ)) : ℤ) =
+        (p - q) + (D : ℤ) * ((p - q) * K) := by push_cast; ring
+    rw [e] at h2
+    exact (Int.dvd_add_left (Dvd.intro _ rfl)).1 h2
+  · intro h
+    have h0 := Int.eq_zero_of_abs_lt_dvd h (by rw [abs_lt]; constructor <;> omega)
+    have : p = q := by omega
+    subst this
+    simp
+
+theorem aext_mem (V : LV) (ats : List Atom) (a : Atom) (hnd : (ids ats).Nodup) (ha : a ∈ ats)
+    (μ : ℕ → ℤ) : ∃ μ', aext V ats μ a.id = aval V μ' a := by
+  induction ats generalizing μ with
+  | nil => simp at ha
+  | cons b l ih =>
+    simp only [ids, List.map_cons, List.nodup_cons] at hnd
+    simp only [aext]
+    rcases List.mem_cons.1 ha with rfl | hl
+    · exact ⟨μ, by rw [aext_off V l _ _ hnd.1, Function.update_self]⟩
+    · exact ih hnd.2 hl _
+
+/-- `f = [N ∣ u R - v R]` read as `[d ∣ u - v]` for the repunit `R = (N - 1)/(d - 1)` of
+`N = d^m`, `m ≥ 1`, and atoms `u, v` reduced modulo `d`. -/
+def repDel1 (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) (pre : List Fac) (f : Fac)
+    (post : List Fac) (r u v : Atom) : Option ATm :=
+  match r.dp, u.args, v.args with
+  | [d, N], [(_, du)], [(_, dv')] =>
+    if r.f == 4 && u.f == 2 && v.f == 2 && decide (du = d) && decide (dv' = d) &&
+        decide (f.1 = N) &&
+        decide (f.2 = ipSub (ipMul (ipV u.id) (ipV r.id)) (ipMul (ipV v.id) (ipV r.id))) &&
+        PW.contains (d, N) && dvdP fl PW d N && decide ((ids t.ats).Nodup) &&
+        t.ats.contains r && t.ats.contains u && t.ats.contains v then
+      some ⟨t.c, t.sums, t.ats, pre ++ (d, ipSub (ipV u.id) (ipV v.id)) :: post, t.phs⟩
+    else none
+  | _, _, _ => none
+
+/-- The first repunit delta of a term. -/
+def repDel (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
+  firstSome (fun q => firstSome (fun r => firstSome (fun u => firstSome
+    (fun v => repDel1 fl PW t q.1 q.2.1 q.2.2 r u v) t.ats) t.ats) t.ats) (splits t.dels)
+
+theorem repDel1_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t t' : ATm) (pre : List Fac) (f : Fac)
+    (post : List Fac) (r u v : Atom) (hd : t.dels = pre ++ f :: post)
+    (h : repDel1 fl PW t pre f post r u v = some t') : PWEq V t t' := by
+  unfold repDel1 at h
+  split at h
+  · next d N qu du qv dv' hr hu hv =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, List.contains_iff_mem] at hc
+    obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hr4, hu2⟩, hv2⟩, hdu⟩, hdv⟩, hfN⟩, hf2⟩, hpw⟩, hdvd⟩, hnd⟩, hra⟩, hua⟩, hva⟩ := hc
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody
+    set E := aext V t.ats μ
+    obtain ⟨hD2, m, hm⟩ := hPW _ hpw
+    have hdN := dvdP_ok V.ρ fl hfl PW hPW _ _ hdvd
+    set Dn := d.den V.ρ.dv
+    have hm1 : 1 ≤ m := by
+      rcases m with _ | m
+      · simp only [pow_zero] at hm
+        rw [hm] at hdN
+        have := Nat.le_of_dvd one_pos hdN
+        omega
+      · omega
+    have hval : ∀ a : Atom, a ∈ t.ats → a.f = 2 → (∃ q, a.args = [(q, d)]) →
+        0 ≤ E a.id ∧ E a.id < Dn := by
+      intro a ha hf ⟨q, hargs⟩
+      obtain ⟨μ', hμ'⟩ := aext_mem V t.ats a hnd ha μ
+      rw [show E a.id = aval V μ' a from hμ']
+      simp only [aval, hf, show (2 : ℕ) < 100 by norm_num, if_true, bfn, hargs, List.map_cons,
+        List.map_nil, argV, List.getD_cons_zero]
+      have hpos : (0 : ℤ) < (Dn : ℤ) := by exact_mod_cast (show 0 < Dn by omega)
+      exact ⟨Int.emod_nonneg _ (ne_of_gt hpos), Int.emod_lt_of_pos _ hpos⟩
+    have hu' := hval u hua hu2 ⟨qu, by rw [hu, hdu]⟩
+    have hv' := hval v hva hv2 ⟨qv, by rw [hv, hdv]⟩
+    have hR : E r.id = (((N.den V.ρ.dv - 1) / (Dn - 1) : ℕ) : ℤ) := by
+      obtain ⟨μ', hμ'⟩ := aext_mem V t.ats r hnd hra μ
+      rw [show E r.id = aval V μ' r from hμ']
+      simp only [aval, hr4, show (4 : ℕ) < 100 by norm_num, if_true, bfn, hr, List.map_cons,
+        List.map_nil, List.getD_cons_zero, List.getD_cons_succ, Dn]
+    have key := rep_dvd Dn m (by omega) hm1 (E u.id) (E v.id) hu'.1 hu'.2 hv'.1 hv'.2
+    have hdel : delV V.ρ.dv E f = delV V.ρ.dv E (d, ipSub (ipV u.id) (ipV v.id)) := by
+      unfold delV
+      rw [hf2, hfN, ipDen_sub, ipDen_mul, ipDen_mul, ipDen_V, ipDen_V, ipDen_V, ipDen_sub, ipDen_V,
+        ipDen_V, hR, hm]
+      exact if_congr key rfl rfl
+    show bodyOf V.ρ.dv (pre ++ (d, ipSub (ipV u.id) (ipV v.id)) :: post) t.phs E =
+      bodyOf V.ρ.dv t.dels t.phs E
+    rw [hd]
+    simp only [bodyOf, List.map_append, List.map_cons, List.prod_append, List.prod_cons, hdel]
+  · simp at h
+
+theorem repDel_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t t' : ATm) (h : repDel fl PW t = some t') :
+    PWEq V t t' := by
+  obtain ⟨q, hq, h1⟩ := firstSome_spec _ _ _ h
+  obtain ⟨r, -, h2⟩ := firstSome_spec _ _ _ h1
+  obtain ⟨u, -, h3⟩ := firstSome_spec _ _ _ h2
+  obtain ⟨v, -, h4⟩ := firstSome_spec _ _ _ h3
+  exact repDel1_ok V hρ fl hfl PW hPW t t' q.1 q.2.1 q.2.2 r u v (splits_spec _ _ hq) h4
+
 /-- Reduced arguments read under divisors replaced, at most `n` times. -/
 def modRules (fl : List ℕ) (PW : List (DMon × DMon)) : ℕ → ATm → ATm
   | 0, t => t
   | n + 1, t => match firstSome (modDropAt fl PW t) (splits t.ats) with
     | some t' => modRules fl PW n t'
-    | none => t
+    | none => match repDel fl PW t with
+      | some t' => modRules fl PW n t'
+      | none => t
 
 theorem modRules_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
     (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (n : ℕ) (t : ATm) :
@@ -1206,7 +1489,9 @@ theorem modRules_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
     · next t' h =>
       obtain ⟨sp, hsp, he⟩ := firstSome_spec _ _ _ h
       exact (modDropAt_ok V hρ fl hfl PW hPW t t' sp (splits_spec _ sp hsp) he).trans (ih t')
-    · exact ⟨rfl, rfl, fun _ => rfl⟩
+    · split
+      · next t' h => exact (repDel_ok V hρ fl hfl PW hPW t t' h).trans (ih t')
+      · exact ⟨rfl, rfl, fun _ => rfl⟩
 
 /-! ## Constant atoms, exclusive or of bit patterns and shared atoms -/
 

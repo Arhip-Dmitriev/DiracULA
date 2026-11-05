@@ -66,6 +66,9 @@ A result whose proof reads a loop count as a width holds at every ν with ν (20
 each such count: the parameter k the loop runs over equals the width n of the registers of
 d^n levels. An assume statement D2 % D1 == 0 between dimension monomials is used as D1 ∣ D2.
 
+A dimension d^(n + c), c < 0, of a width n assumed at least L with L + c ≥ 1 has the floor 2,
+from the hypothesis L ≤ n.
+
 A result of a program containing a loop over a symbolic range holds at every ν for which
 the loop counts are nonnegative. An assertion A == B is proved as A.sem V = B.sem V. A
 measured distribution is proved as one theorem per branch (the branch's probability is
@@ -230,6 +233,11 @@ Besides these moves, the normaliser
   - when no elimination applies, reads a bound variable x as another bound variable y of the
     same range D under a delta [D ∣ x - y] (xPin): for x, y < D the delta holds only at x = y,
     whatever else reads x;
+  - when neither applies, pins a variable x of range D by a delta [D ∣ s x + b] to a new atom
+    u = mod(-s b, D), substituted for x everywhere, when every other factor reading x is a phase
+    periodic modulo D or a delta of a modulus that is a power of D (elimPinU);
+  - reads a delta [N ∣ u R - v R] as [d ∣ u - v] for the repunit R = (N - 1)/(d - 1) of
+    N = d^m, d dividing N, and atoms u, v reduced modulo d (repDel): R ≡ 1 mod d;
   - orders the atom table canonically, each step the atom of least key among those that read
     no atom left, names the atoms by first occurrence in the factors and then in the table,
     renames bound variables by first occurrence and sorts the sums.
@@ -299,9 +307,6 @@ certified.
 Adjoints, inverses, integer and symbolic powers applied to states, traces, partial traces,
 partial and basis measurements, channels and their trace preservation, and functions of
 operators are certified (section 4). The following report "cannot certify":
-  - a partial trace over a register of symbolic width holding a repeated digit, such as
-    keep(|ghz>, 0) of |k>_d @ |k>_d^@(n-1): the delta [d^(n-1) ∣ (u - u') R] of the repunit R
-    is not reduced to [d ∣ u - u'];
   - a power U^k whose iterate has amplitudes outside the coefficients, phases and atoms of
     section 6.1, such as the rotation cos(k acos(1 - 2/2^n)) of the Grover iterate, and a
     symbolic power of an operator not applied to a state;

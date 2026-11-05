@@ -3031,11 +3031,43 @@ class Certifier:
     def floors(self) -> list[int]:
         wide = self.vs.needs_width
         return [
-            (2 if wide and isinstance(self.vs.powers[s][1], sympy.Symbol) else 0)
+            (
+                2
+                if (wide and isinstance(self.vs.powers[s][1], sympy.Symbol))
+                or self.offset_low(self.vs.powers[s][1]) is not None
+                else 0
+            )
             if s in self.vs.powers
             else 2
             for s in self.vs.dsyms
         ]
+
+    def width_low(self, n: sympy.Symbol) -> int | None:
+        """The greatest lower bound ``L`` of the width ``n`` an assumption states, or None."""
+        best = None
+        for fact in getattr(self, "assumptions", []):
+            for rel in (fact, getattr(fact, "reversed", fact)):
+                if isinstance(rel, (sympy.GreaterThan, sympy.StrictGreaterThan)) and rel.lhs == n:
+                    b = rel.rhs
+                    if b.is_Integer:
+                        lo = int(b) + (1 if isinstance(rel, sympy.StrictGreaterThan) else 0)
+                        best = lo if best is None else max(best, lo)
+        return best
+
+    def offset_low(self, e: sympy.Expr) -> tuple[sympy.Symbol, int] | None:
+        """``(n, L)`` for an exponent ``n + c``, ``c < 0``, of a width ``n`` assumed at least
+        ``L`` with ``L + c >= 1``; None otherwise."""
+        e = sympy.sympify(e)
+        if isinstance(e, sympy.Symbol) or len(e.free_symbols) != 1:
+            return None
+        (n,) = e.free_symbols
+        c = sympy.expand(e - n)
+        if not (c.is_Integer and c < 0 and n in self.vs.widths):
+            return None
+        lo = self.width_low(n)
+        if lo is None or lo + int(c) < 1:
+            return None
+        return n, lo
 
     def wl(self) -> list[tuple[int, Y.DMon, Y.DMon]]:
         """The width links: ``(ν k, d, N)`` for each power ``N = d^n`` whose width ``n`` is the
@@ -4126,6 +4158,14 @@ class Certifier:
             hyps.append((n.name, "ℕ"))
             if vs.needs_width:
                 hyps.append((f"h_{n.name}", f"1 ≤ {n.name}"))
+        lows = {}
+        for s in vs.dsyms:
+            if s in vs.powers:
+                got = self.offset_low(vs.powers[s][1])
+                if got is not None:
+                    lows[got[0]] = got[1]
+        for n, lo in lows.items():
+            hyps.append((f"h_{n.name}_lo", f"{lo} ≤ {n.name}"))
         pw_cases = []
         for s, (base, n) in vs.powers.items():
             j = vs.dsyms.index(s)
@@ -4164,9 +4204,10 @@ class Certifier:
             if s in vs.powers and fl[i] == 2:
                 base, n = vs.powers[s]
                 hb = f"h_{_clean(base.name)}" if base in vs.dsyms else "(by norm_num)"
+                hn = f"h_{n.name}" if isinstance(n, sympy.Symbol) else "(by omega)"
                 fl_cases.append(
                     f"  · simp only [flv, FL, List.getD_cons_succ, List.getD_cons_zero]\n"
-                    f"    exact pow_floor _ _ _ h_{_clean(s.name)} {hb} h_{n.name}"
+                    f"    exact pow_floor _ _ _ h_{_clean(s.name)} {hb} {hn}"
                 )
             else:
                 fl_cases.append("  · simp [flv, FL] <;> omega")

@@ -377,6 +377,76 @@ def a_elim_var(
     return elim_pin_r(x, d, ats, ds, ps)
 
 
+def elim_pin_u1(
+    pw: Sequence[tuple[Y.DMon, Y.DMon]],
+    x: int,
+    d: Y.DMon,
+    ats: tuple[Atom, ...],
+    pre: tuple[Y.Fac, ...],
+    f: Y.Fac,
+    post: tuple[Y.Fac, ...],
+    ps: tuple[Y.Fac, ...],
+    u: int,
+) -> AElim | None:
+    """``elimPinU1``."""
+    lin = Y.ip_lin(x, f[1])
+    if lin is None:
+        return None
+    s = Y.ip_const(lin[0])
+    if s is None:
+        return None
+    b = lin[1]
+    fvars = [v for g in (*pre, *post, *ps) for v in Y.fac_vars(g)]
+    if not (
+        s in (1, -1)
+        and d[0] != 0
+        and f[0] == d
+        and x not in ids(ats)
+        and plain_p(ats, b)
+        and u not in ids(ats)
+        and u not in arg_vs(ats)
+        and u not in fvars
+        and u not in ip_vs(b)
+        and u != x
+        and all(not Y.fac_has(x, g) or Y.dm_dvd(g[0], f[0]) for g in ps)
+        and all(
+            not Y.fac_has(x, g) or Y.dm_dvd(g[0], f[0]) or (f[0], g[0]) in pw for g in (*pre, *post)
+        )
+    ):
+        return None
+    v = Y.ip_v(u)
+    atom: Atom = (u, 2, (), (), ((Y.pin_val(s, b), d),))
+    return (
+        Y.of_q(1),
+        (atom, *(at_sub(x, v, t) for t in ats)),
+        tuple(Y.fac_sub(x, v, g) for g in (*pre, *post)),
+        tuple(Y.fac_sub(x, v, g) for g in ps),
+    )
+
+
+def fresh_u(x: int, ats: Sequence[Atom], ds: Sequence[Y.Fac], ps: Sequence[Y.Fac]) -> int:
+    """``freshU``."""
+    vs = [x, *ids(ats), *arg_vs(ats), *(v for g in (*ds, *ps) for v in Y.fac_vars(g))]
+    return max(vs + [0]) + 1
+
+
+def elim_pin_u(
+    pw: Sequence[tuple[Y.DMon, Y.DMon]],
+    x: int,
+    d: Y.DMon,
+    ats: tuple[Atom, ...],
+    ds: tuple[Y.Fac, ...],
+    ps: tuple[Y.Fac, ...],
+) -> AElim | None:
+    """``elimPinU``."""
+    u = fresh_u(x, ats, ds, ps)
+    for pre, f, post in Y._splits(ds):
+        e = elim_pin_u1(pw, x, d, ats, pre, f, post, ps, u)
+        if e is not None:
+            return e
+    return None
+
+
 def pin_r_of(x: int, d: Y.DMon, a: Sequence[Atom], f: Y.Fac) -> int | None:
     if f[0] != d or not (Y.dm_const(d) and d[0] != 0):
         return None
@@ -508,12 +578,25 @@ def x_pin(t: ATm) -> ATm | None:
     return None
 
 
+def a_elim_step_u(pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
+    """``aElimStepU``."""
+    for pre, (x, d), post in Y._splits(t[1]):
+        if x in [y for y, _ in (*pre, *post)]:
+            continue
+        e = elim_pin_u(pw, x, d, t[2], t[3], t[4])
+        if e is not None:
+            return (Y.cm_mul(t[0], e[0]), pre + post, e[1], e[2], e[3])
+    return None
+
+
 def a_elim_all(pw: Sequence[tuple[Y.DMon, Y.DMon]], n: int, t: ATm) -> ATm:
     for _ in range(n):
         r = a_rules(len(t[2]) + 1, t)
         t2 = a_elim_step(pw, r)
         if t2 is None:
             t2 = x_pin(r)
+        if t2 is None:
+            t2 = a_elim_step_u(pw, r)
         if t2 is None:
             return t
         t = t2
@@ -837,6 +920,56 @@ def mod_drop_at(
     return None
 
 
+def rep_del1(
+    fl: Sequence[int],
+    pw: Sequence[tuple[Y.DMon, Y.DMon]],
+    t: ATm,
+    pre: tuple[Y.Fac, ...],
+    f: Y.Fac,
+    post: tuple[Y.Fac, ...],
+    r: Atom,
+    u: Atom,
+    v: Atom,
+) -> ATm | None:
+    """``repDel1``."""
+    if not (len(r[3]) == 2 and len(u[4]) == 1 and len(v[4]) == 1):
+        return None
+    d, n = r[3]
+    du, dv = u[4][0][1], v[4][0][1]
+    want = Y.ip_sub(Y.ip_mul(Y.ip_v(u[0]), Y.ip_v(r[0])), Y.ip_mul(Y.ip_v(v[0]), Y.ip_v(r[0])))
+    i = ids(t[2])
+    if not (
+        r[1] == 4
+        and u[1] == 2
+        and v[1] == 2
+        and du == d
+        and dv == d
+        and f[0] == n
+        and f[1] == want
+        and (d, n) in pw
+        and dvd_p(fl, pw, d, n)
+        and len(i) == len(set(i))
+        and r in t[2]
+        and u in t[2]
+        and v in t[2]
+    ):
+        return None
+    new = (d, Y.ip_sub(Y.ip_v(u[0]), Y.ip_v(v[0])))
+    return (t[0], t[1], t[2], (*pre, new, *post), t[4])
+
+
+def rep_del(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
+    """``repDel``."""
+    for pre, f, post in Y._splits(t[3]):
+        for r in t[2]:
+            for u in t[2]:
+                for v in t[2]:
+                    e = rep_del1(fl, pw, t, pre, f, post, r, u, v)
+                    if e is not None:
+                        return e
+    return None
+
+
 def mod_rules(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], n: int, t: ATm) -> ATm:
     for _ in range(n):
         t2 = None
@@ -844,6 +977,8 @@ def mod_rules(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], n: int, t:
             t2 = mod_drop_at(fl, pw, t, pre, a, post)
             if t2 is not None:
                 break
+        if t2 is None:
+            t2 = rep_del(fl, pw, t)
         if t2 is None:
             return t
         t = t2

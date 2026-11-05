@@ -54,7 +54,10 @@ def aElimVar (PW : List (DMon × DMon)) (x : ℕ) (D : DMon) (ats : List Atom) (
         | none =>
           match elimPinA x D ats ds ps with
           | some e => some e
-          | none => elimLinC PW x D ats ds ps
+          | none =>
+            match elimLinC PW x D ats ds ps with
+            | some e => some e
+            | none => elimPinR x D ats ds ps
 
 theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) (e : AElim)
@@ -73,7 +76,10 @@ theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
         · split at h
           · next e' he =>
             simp only [Option.some.injEq] at h; subst h; exact elimPinA_ok V hρ _ _ _ _ _ _ he
-          · exact elimLinC_ok V hρ PW hPW _ _ _ _ _ _ h
+          · split at h
+            · next e' he =>
+              simp only [Option.some.injEq] at h; subst h; exact elimLinC_ok V hρ PW hPW _ _ _ _ _ _ he
+            · exact elimPinR_ok V x D ats ds ps e h
 
 /-- One elimination of a bound variable, the first that applies. -/
 def aElimStep (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
@@ -1101,17 +1107,6 @@ theorem modRules_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
     · exact ⟨rfl, rfl, fun _ => rfl⟩
 
 /-! ## Constant atoms, exclusive or of bit patterns and shared atoms -/
-
-theorem wfA_append (l1 l2 : List Atom) (h : wfA (l1 ++ l2) = true) : wfA l1 = true := by
-  induction l1 with
-  | nil => rfl
-  | cons a l ih =>
-    obtain ⟨ha, hw⟩ := wfA_cons a (l ++ l2) h
-    simp only [wfA, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true', List.contains_eq_mem,
-      decide_eq_false_iff_not]
-    refine ⟨fun v hv hv' => ha v hv ?_, ih hw⟩
-    simp only [ids, List.map_cons, List.mem_cons, List.map_append, List.mem_append] at hv' ⊢
-    tauto
 
 /-- An atom replaced by one of the same variable whose value agrees after the atoms before it. -/
 theorem swap_pw (V : LV) (t : ATm) (sp : List Atom × Atom × List Atom)
@@ -2551,6 +2546,107 @@ theorem redAt_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
       rw [hz _ hF, hz _ hF', zero_mul, zero_mul]
   · simp at h
 
+/-- `(u, w)` when `f = [D ∣ s a + c b]` equates the reduced atoms `a`, `b` modulo a constant `D`,
+`s = ±1`, `D ∣ s + c`; `u` the one of lesser key. -/
+def eqDelOf (ats : List Atom) (f : Fac) : Option (ℕ × ℕ) :=
+  match f.2 with
+  | [([a], ca), ([b], cb)] =>
+    if f.1.isConst = true ∧ f.1.c ≠ 0 ∧ (ca = 1 ∨ ca = -1) ∧ (ca + cb) % (f.1.c : ℤ) = 0 ∧
+        isRed ats a f.1 = true ∧ isRed ats b f.1 = true ∧ a ≠ b then
+      match findAt ats a, findAt ats b with
+      | some A, some B => if zLt (atKey B) (atKey A) then some (b, a) else some (a, b)
+      | _, _ => none
+    else none
+  | _ => none
+
+theorem eqDelOf_spec (V : LV) (ats : List Atom) (hw : wfA ats = true) (hn : (ids ats).Nodup)
+    (f : Fac) (u w : ℕ) (h : eqDelOf ats f = some (u, w)) (μ : ℕ → ℤ)
+    (hd : delV V.ρ.dv (aext V ats μ) f ≠ 0) : aext V ats μ u = aext V ats μ w := by
+  unfold eqDelOf at h
+  split at h
+  · next a ca b cb hp =>
+    split_ifs at h with hc
+    obtain ⟨hD, hD0, hs, hsc, ha, hb, -⟩ := hc
+    set F := aext V ats μ
+    have hden : f.1.den V.ρ.dv = f.1.c := DMon.den_isConst _ _ hD
+    have hpos : (0 : ℤ) < (f.1.c : ℤ) := by exact_mod_cast Nat.pos_of_ne_zero hD0
+    have hab : F a = F b := by
+      obtain ⟨Ya, hYa⟩ := red_val V ats hw hn a f.1 ha μ
+      obtain ⟨Yb, hYb⟩ := red_val V ats hw hn b f.1 hb μ
+      rw [hden] at hYa hYb
+      have hYa' : F a = Ya % (f.1.c : ℤ) := hYa
+      have hYb' : F b = Yb % (f.1.c : ℤ) := hYb
+      have hdv : ((f.1.den V.ρ.dv : ℕ) : ℤ) ∣ ipDen F f.2 := by
+        unfold delV at hd; by_contra hc'; exact hd (if_neg hc')
+      rw [hp, hden] at hdv
+      simp only [ipDen, imDen, List.map_cons, List.map_nil, List.prod_cons, List.prod_nil,
+        mul_one, List.sum_cons, List.sum_nil, add_zero] at hdv
+      have hdc : (f.1.c : ℤ) ∣ ca + cb := Int.dvd_of_emod_eq_zero hsc
+      have h2 : (f.1.c : ℤ) ∣ ca * (ca * F a + cb * F b) - ca * ((ca + cb) * F b) :=
+        dvd_sub (dvd_mul_of_dvd_right hdv _) (dvd_mul_of_dvd_right (Dvd.dvd.mul_right hdc _) _)
+      have e2 : ca * (ca * F a + cb * F b) - ca * ((ca + cb) * F b) = F a - F b := by
+        rcases hs with rfl | rfl <;> ring
+      rw [e2] at h2
+      have ha0 := Int.emod_nonneg Ya hpos.ne'
+      have ha1 := Int.emod_lt_of_pos Ya hpos
+      have hb0 := Int.emod_nonneg Yb hpos.ne'
+      have hb1 := Int.emod_lt_of_pos Yb hpos
+      rw [hYa', hYb'] at h2 ⊢
+      obtain ⟨k, hk⟩ := h2
+      have : k = 0 := by
+        rcases lt_trichotomy k 0 with h' | h' | h'
+        · nlinarith
+        · exact h'
+        · nlinarith
+      subst this
+      omega
+    split at h
+    · next A B _ _ =>
+      split_ifs at h <;> simp only [Option.some.injEq, Prod.mk.injEq] at h <;>
+        obtain ⟨rfl, rfl⟩ := h
+      · exact hab.symm
+      · exact hab
+    · simp at h
+  · simp at h
+
+/-- The atom of greater key read as the lesser one in the other factors, under the delta at the
+split `sp` equating them. -/
+def eqAt (t : ATm) (sp : List Fac × Fac × List Fac) : Option ATm :=
+  match eqDelOf t.ats sp.2.1 with
+  | some (u, w) =>
+    if wfA t.ats && (ids t.ats).Nodup &&
+        ((sp.1 ++ sp.2.2).any (facHas w) || t.phs.any (facHas w)) then
+      some ⟨t.c, t.sums, t.ats, sp.1.map (facSub w (ipV u)) ++ sp.2.1 ::
+        sp.2.2.map (facSub w (ipV u)), t.phs.map (facSub w (ipV u))⟩
+    else none
+  | none => none
+
+theorem eqAt_ok (V : LV) (t t' : ATm) (sp : List Fac × Fac × List Fac)
+    (hsp : t.dels = sp.1 ++ sp.2.1 :: sp.2.2) (h : eqAt t sp = some t') : PWEq V t t' := by
+  unfold eqAt at h
+  split at h
+  · next u w ho =>
+    split_ifs at h with hc
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    refine ⟨rfl, rfl, fun μ => ?_⟩
+    unfold abody bodyOf
+    simp only
+    rw [hsp]
+    set F := aext V t.ats μ
+    simp only [List.map_append, List.map_cons, List.prod_append, List.prod_cons]
+    by_cases hd : delV V.ρ.dv F sp.2.1 = 0
+    · rw [hd]; ring
+    · have he : F u = F w := eqDelOf_spec V t.ats hc.1.1 hc.1.2 sp.2.1 u w ho μ hd
+      have hF : Function.update F w (ipDen F (ipV u)) = F := by
+        rw [show ipDen F (ipV u) = F u by simp [ipDen, ipV, imDen], he, Function.update_eq_self]
+      have hD : ∀ g : Fac, delV V.ρ.dv F (facSub w (ipV u) g) = delV V.ρ.dv F g := fun g => by
+        unfold delV facSub; rw [ipDen_subst, hF]
+      have hP : ∀ g : Fac, phV V.ρ.dv F (facSub w (ipV u) g) = phV V.ρ.dv F g := fun g => by
+        unfold phV facSub; rw [ipDen_subst, hF]
+      simp only [List.map_map, Function.comp_def, hD, hP]
+  · simp at h
+
 /-- One rule for constants, exclusive or and shared atoms, the first that applies. -/
 def pRule1 (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
   match firstSome (cstAt t) (splits t.ats) with
@@ -2588,7 +2684,10 @@ def pRule1 (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
                     | none =>
                       match firstSome (redAt t) (splits t.ats) with
                       | some t' => some t'
-                      | none => firstSome (falseAt fl t) (splits t.dels)
+                      | none =>
+                        match firstSome (eqAt t) (splits t.dels) with
+                        | some t' => some t'
+                        | none => firstSome (falseAt fl t) (splits t.dels)
 
 theorem swapAt_ok (V : LV) (g : Atom → Option Atom) (hg : ∀ a a', g a = some a' →
     a'.id = a.id ∧ ∀ μ, aval V μ a' = aval V μ a) (t t' : ATm) (sp : List Atom × Atom × List Atom)
@@ -2676,8 +2775,13 @@ theorem pRule1_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.�
                           simp only [Option.some.injEq] at h; subst h
                           obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
                           exact redAt_ok V t _ p (splits_spec _ p hp) he
-                        · obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h
-                          exact falseAt_ok V fl hfl t _ p (splits_spec _ p hp) he
+                        · split at h
+                          · next t'' h' =>
+                            simp only [Option.some.injEq] at h; subst h
+                            obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h'
+                            exact eqAt_ok V t _ p (splits_spec _ p hp) he
+                          · obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ h
+                            exact falseAt_ok V fl hfl t _ p (splits_spec _ p hp) he
 
 /-- The rules for constants, exclusive or and shared atoms repeated, at most `n` of them. -/
 def pRules (fl : List ℕ) (PW : List (DMon × DMon)) : ℕ → ATm → ATm

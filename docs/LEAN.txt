@@ -53,11 +53,14 @@ dimension symbols (V.ρ.dv), the coefficient atoms and the functions a program c
 is ν (IN + i), each parameter of the program (a var symbol) is ν (2000 + k). The theorem
 holds for every V and every ν, so for every value of the symbols. Its hypotheses state the
 range facts used: 2 ≤ d for each dimension, n : ℕ with ρ.dv k = d ^ n for each register of
-d^n levels, 1 ≤ n where the result needs it, and one hypothesis per assume statement.
+d^n levels (d ^ (n + c) for the least offset c of the program, every other power of d written
+over it), 1 ≤ n where the result needs it, and one hypothesis per assume statement.
 V.ρ.OK states that every dimension is positive, every coefficient atom is nonzero and the
 atoms come in conjugate pairs (atom 2j + 1 is the conjugate of atom 2j), so that a result
 with complex parameters holds for every nonzero value of them. An integer parameter that only
-multiplies amplitudes is read as a coefficient atom in the same way.
+multiplies amplitudes is read as a coefficient atom in the same way; a result that needs it real
+has the hypothesis starRingEnd ℂ (V.ρ.atom 2k) = V.ρ.atom 2k for each such parameter, under which
+the exponent of its conjugate atom is moved onto it (realT, certify_real_c).
 
 A result whose proof reads a loop count as a width holds at every ν with ν (2000 + k) = n for
 each such count: the parameter k the loop runs over equals the width n of the registers of
@@ -78,7 +81,10 @@ normalise(s), shown or inside a larger expression, is proved as
 
 from three facts: k s equals R, k² ⟨s|s⟩ = 1 and k is a positive real (nrm_cert), the first
 two by the normaliser. An operator printed as the image of a basis ket, |x> -> E(x), is proved
-as the operator applied to |x> for a free x equalling E(x).
+as the operator applied to |x> for a free x equalling E(x). An operator equality that holds only
+for reduced inputs is proved at every ν whose output and input variables lie in their ranges,
+RgOK V RG ν (certify_rg, certify_eq_rg); each such variable v is read through a new atom mod(v, D),
+which equals v there.
 
 4. THE MEANING OF A PROGRAM
 ---------------------------
@@ -180,6 +186,10 @@ Besides these moves, the normaliser
     argument u = mod(y, N) as 0; reads mod(0, N) as 0;
   - reads a reduced argument mod(z, N) of a remainder z modulo N - 1 as z, and a delta
     [N ∣ 1 + z] or [N ∣ 1 + z - N] of such a remainder as false, for 2 ≤ N;
+  - pins a variable x of constant range D to a reduced atom u = mod(q, D) by a delta
+    [D ∣ s x + c u], s = ±1, D ∣ s + c;
+  - under a delta [D ∣ s a + c b] equating two reduced atoms modulo a constant D, reads the atom
+    of greater key as the other in the remaining factors;
   - orders the atom table canonically, each step the atom of least key among those that read
     no atom left, names the atoms by first occurrence in the factors and then in the table,
     renames bound variables by first occurrence and sorts the sums.
@@ -242,23 +252,5 @@ certify".
 
 10.1 Values the program does not determine
 Results that read rand, a branch on a value that is not concrete, or a state assigned from
-Python have no syntax tree to translate.
-
-10.2 Sizes with offsets
-A register of d^(n - 1) levels has a width that is not a symbol; its size is reported as
-"cannot certify: the size d**(n - 1)".
-
-10.3 Loops in normalised states
-normalise of a state built by a loop over a symbolic range is not certified: the identity
-k² <s|s> = 1 is proved only for states without loops.
-
-10.4 Real parameters under conjugation
-A coefficient atom is complex, so the conjugate of an integer parameter used as an amplitude is
-a separate atom: <s|s> for |s> = a |0> + b |1> is printed as a^2 + b^2 but proved only as
-|a|^2 + |b|^2, and is reported as "cannot certify".
-
-10.5 Phases that are not periodic in their input
-An operator is stated for every integer valuation of its inputs. A printed operator whose phase
-e^(2 pi i x/D) reads an input x of fewer than D levels, such as Z RZ with RZ = e^(i pi x/4) on a
-qubit, holds only for reduced inputs and is reported as "cannot certify". States built with
-such gates are certified.
+Python have no syntax tree to translate. Every other result of the examples and benchmarks is
+certified.

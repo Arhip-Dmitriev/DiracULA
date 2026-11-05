@@ -955,4 +955,114 @@ theorem nrm_cert (V : LV) (hρ : V.ρ.OK) (L : List DMon) (p : Prog) (r : List A
   rw [← hA]
   exact nrm_of x hx _ _ hB
 
+/-! ## Real coefficient atoms -/
+
+theorem zpw_set (f : ℕ → ℂ) : ∀ (k i : ℕ) (l : List ℤ),
+    zpw f k l = zpw f k (l.set i 0) * f (k + i) ^ (l.getD i 0)
+  | k, i, [] => by simp [zpw]
+  | k, 0, a :: l => by simp [zpw]; ring
+  | k, i + 1, a :: l => by
+    simp only [zpw, List.set_cons_succ, List.getD_cons_succ]
+    rw [zpw_set f (k + 1) i l, show k + (i + 1) = k + 1 + i by omega]
+    ring
+
+/-- `m` with the exponent of atom `2 j + 1` moved to atom `2 j`. -/
+def realC (j : ℕ) (m : CMon) : CMon :=
+  CMon.mul { m with am := m.am.set (2 * j + 1) 0 } (CMon.atomP (2 * j) (m.am.getD (2 * j + 1) 0))
+
+theorem realC_den (ρ : Val) (hρ : ρ.OK) (j : ℕ) (h : ρ.atom (2 * j + 1) = ρ.atom (2 * j))
+    (m : CMon) : (realC j m).den ρ = m.den ρ := by
+  unfold realC
+  rw [CMon.den_mul ρ hρ, atomP_den, ← h]
+  conv_rhs => simp only [CMon.den]; rw [zpw_set ρ.atom 0 (2 * j + 1) m.am]
+  simp only [CMon.den, zero_add]
+  ring
+
+/-- A term with the atoms `2 j`, `j ∈ rs`, read as real. -/
+def realT (rs : List ℕ) (t : ATm) : ATm :=
+  ⟨rs.foldl (fun m j => realC j m) t.c, t.sums, t.ats, t.dels, t.phs⟩
+
+theorem realT_den (V : LV) (hρ : V.ρ.OK) (rs : List ℕ)
+    (h : ∀ j ∈ rs, V.ρ.atom (2 * j + 1) = V.ρ.atom (2 * j)) (t : ATm) (ν : ℕ → ℤ) :
+    (realT rs t).den V ν = t.den V ν := by
+  have hf : ∀ (l : List ℕ) (m : CMon), (∀ j ∈ l, V.ρ.atom (2 * j + 1) = V.ρ.atom (2 * j)) →
+      (l.foldl (fun m j => realC j m) m).den V.ρ = m.den V.ρ := by
+    intro l
+    induction l with
+    | nil => intro m _; rfl
+    | cons j l ih =>
+      intro m hl
+      simp only [List.foldl_cons]
+      rw [ih _ (fun j hj => hl j (List.mem_cons_of_mem _ hj)),
+        realC_den V.ρ hρ j (hl j List.mem_cons_self) m]
+  simp only [ATm.den, realT]
+  rw [hf rs t.c h]
+  rfl
+
+theorem axDen_real (V : LV) (hρ : V.ρ.OK) (rs : List ℕ)
+    (h : ∀ j ∈ rs, V.ρ.atom (2 * j + 1) = V.ρ.atom (2 * j)) (e : List ATm) (ν : ℕ → ℤ) :
+    axDen V ν (e.map (realT rs)) = axDen V ν e := by
+  simp only [axDen, List.map_map, Function.comp_def, realT_den V hρ rs h]
+
+/-- `certify_lit_c` with the atoms `2 j`, `j ∈ rs`, real. -/
+theorem certify_real_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (rs : List ℕ)
+    (hr : ∀ j ∈ rs, starRingEnd ℂ (V.ρ.atom (2 * j)) = V.ρ.atom (2 * j)) (p : Prog)
+    (r e : List ATm) (ns : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hn : ((e ++ axNeg r).map (realT rs)).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hv : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, (∀ c ∈ p.counts, 0 ≤ ipDen ν c) → p.sem V ν = axDen V ν r := by
+  intro ν hc
+  have h' : ∀ j ∈ rs, V.ρ.atom (2 * j + 1) = V.ρ.atom (2 * j) := fun j hj => by
+    rw [hρ.aconj, hr j hj]
+  have hz' := nfA_zero V hρ fl hfl PW hPW _ (by rw [nfA_of_lit fl PW _ ns hn, hz]) ν
+  rw [axDen_real V hρ rs h', axDen_append, axDen_neg] at hz'
+  rw [Prog.sym_ok V hρ fl hfl PW hPW p e he ν (hi_of p hv ν hc)]
+  linear_combination hz'
+
+/-- `certify_eq_lit_c` with the atoms `2 j`, `j ∈ rs`, real. -/
+theorem certify_eq_real_c (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (rs : List ℕ)
+    (hr : ∀ j ∈ rs, starRingEnd ℂ (V.ρ.atom (2 * j)) = V.ρ.atom (2 * j)) (p q : Prog)
+    (e r : List ATm) (ns : List (Option ATm)) (he : p.sym fl PW = some e)
+    (hq : q.sym fl PW = some r)
+    (hn : ((e ++ axNeg r).map (realT rs)).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = [])
+    (hvp : ∀ c ∈ p.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v)
+    (hvq : ∀ c ∈ q.counts, ∀ v ∈ ipVs c, 2 * IN ≤ v) :
+    ∀ ν, (∀ c ∈ p.counts ++ q.counts, 0 ≤ ipDen ν c) → p.sem V ν = q.sem V ν := by
+  intro ν hc
+  rw [certify_real_c V hρ fl hfl PW hPW rs hr p r e ns he hn hz hvp ν
+    (fun c h' => hc c (List.mem_append_left _ h')),
+    Prog.sym_ok V hρ fl hfl PW hPW q r hq ν (hi_of q hvq ν fun c h' => hc c
+      (List.mem_append_right _ h'))]
+
+/-! ## Operators on inputs in range -/
+
+/-- `certify_lit` at every valuation whose variables of `rg` lie in their ranges. -/
+theorem certify_rg (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (rg : List (ℕ × DMon)) (p : Prog)
+    (r e : List ATm) (ns : List (Option ATm)) (hc : p.counts = []) (he : p.sym fl PW = some e)
+    (hn : ((e ++ axNeg r).map (rgT rg)).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = []) :
+    ∀ ν, RgOK V rg ν → p.sem V ν = axDen V ν r := by
+  intro ν hR
+  have hz' := nfA_zero V hρ fl hfl PW hPW _ (by rw [nfA_of_lit fl PW _ ns hn, hz]) ν
+  rw [axDen_rg V rg _ ν hR, axDen_append, axDen_neg] at hz'
+  rw [Prog.sym_ok V hρ fl hfl PW hPW p e he ν (hi_of p (by simp [hc]) ν (by simp [hc]))]
+  linear_combination hz'
+
+/-- `certify_eq_lit` at every valuation whose variables of `rg` lie in their ranges. -/
+theorem certify_eq_rg (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
+    (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (rg : List (ℕ × DMon)) (p q : Prog)
+    (e r : List ATm) (ns : List (Option ATm)) (hcp : p.counts = []) (hcq : q.counts = [])
+    (he : p.sym fl PW = some e) (hq : q.sym fl PW = some r)
+    (hn : ((e ++ axNeg r).map (rgT rg)).map (normA fl PW AROUNDS) = ns)
+    (hz : (ns.filterMap id).foldl (fun acc t => taAdd t acc) [] = []) :
+    ∀ ν, RgOK V rg ν → p.sem V ν = q.sem V ν := by
+  intro ν hR
+  rw [certify_rg V hρ fl hfl PW hPW rg p r e ns hcp he hn hz ν hR,
+    Prog.sym_ok V hρ fl hfl PW hPW q r hq ν (hi_of q (by simp [hcq]) ν (by simp [hcq]))]
+
 end DiracULA.Lang

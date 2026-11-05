@@ -316,6 +316,195 @@ theorem elimPinA_ok (V : LV) (hρ : V.ρ.OK) (x : ℕ) (D : DMon) (ats : List At
     rw [hok (aext V A ν), aext_append]
   · simp at h
 
+theorem wfA_append (l1 l2 : List Atom) (h : wfA (l1 ++ l2) = true) : wfA l1 = true := by
+  induction l1 with
+  | nil => rfl
+  | cons a l ih =>
+    obtain ⟨ha, hw⟩ := wfA_cons a (l ++ l2) h
+    simp only [wfA, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true', List.contains_eq_mem,
+      decide_eq_false_iff_not]
+    refine ⟨fun v hv hv' => ha v hv ?_, ih hw⟩
+    simp only [ids, List.map_cons, List.mem_cons, List.map_append, List.mem_append] at hv' ⊢
+    tauto
+
+/-! ## Pinning to a reduced atom of the same range -/
+
+/-- The reduced atom `u = mod(q, D)` of `A` that the delta `f` equates with `x` modulo `D`:
+`f = [D ∣ s x + c u]`, `s = ±1`, `D ∣ s + c`. -/
+def pinROf (x : ℕ) (D : DMon) (A : List Atom) (f : Fac) : Option ℕ :=
+  if f.1 = D ∧ D.isConst = true ∧ D.c ≠ 0 then
+    match ipLin x f.2 with
+    | some (a, b) =>
+      match ipConst a, b with
+      | some s, [([u], c)] =>
+        if (s = 1 ∨ s = -1) ∧ (s + c) % (D.c : ℤ) = 0 ∧
+            ((A.find? fun b => b.id == u).any fun b => b.f == 2 && b.args.length == 1 &&
+              (b.args.headD ([], ZM)).2 == D) = true then some u else none
+      | _, _ => none
+    | none => none
+  else none
+
+/-- `x` of constant range `D` pinned to a reduced atom `u = mod(q, D)` by a delta equating them
+modulo `D`. -/
+def elimPinR (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) : Option AElim :=
+  if (ids ats).contains x then none else
+    match firstSome (fun p => (pinROf x D (ats.filter fun a => !atReads x a) p.2.1).map
+        fun u => (p, u)) (splits ds) with
+    | some (p, u) =>
+      if wfA ats && (ids ats).Nodup &&
+          wfA (ats.filter (fun a => !atReads x a) ++ ats.filter (atReads x)) then
+        some ⟨CMon.ofQ 1, ats.filter (fun a => !atReads x a) ++
+          (ats.filter (atReads x)).map (atSub x (ipV u)),
+          (p.1 ++ p.2.2).map (facSub x (ipV u)), ps.map (facSub x (ipV u))⟩
+      else none
+    | none => none
+
+theorem pinROf_spec (x : ℕ) (D : DMon) (A : List Atom) (f : Fac) (u : ℕ)
+    (h : pinROf x D A f = some u) :
+    f.1 = D ∧ D.isConst = true ∧ D.c ≠ 0 ∧ ∃ s c : ℤ, (s = 1 ∨ s = -1) ∧ (s + c) % (D.c : ℤ) = 0 ∧
+      (∀ ν, ipDen ν f.2 = s * ν x + c * ν u) ∧ ∃ b ∈ A, b.id = u ∧ b.f = 2 ∧
+        ∃ q, b.args = [(q, D)] := by
+  unfold pinROf at h
+  split_ifs at h with h1
+  split at h
+  · next a b hlin =>
+    split at h
+    · next s u' c hs =>
+      split_ifs at h with h2
+      simp only [Option.some.injEq] at h
+      subst h
+      obtain ⟨hsr, hsc, hb⟩ := h2
+      obtain ⟨-, -, hp⟩ := ipLin_spec x f.2 a _ hlin
+      refine ⟨h1.1, h1.2.1, h1.2.2, s, c, hsr, hsc, fun ν => ?_, ?_⟩
+      · rw [hp, ipConst_spec a s hs]; simp [ipDen, imDen]; try ring
+      · cases hf : A.find? (fun b => b.id == u') with
+        | none => simp [hf] at hb
+        | some b =>
+          rw [hf] at hb
+          simp only [Option.any_some, Bool.and_eq_true, beq_iff_eq] at hb
+          obtain ⟨⟨hb2, hbl⟩, hbD⟩ := hb
+          refine ⟨b, List.mem_of_find?_eq_some hf, by simpa using List.find?_some hf, hb2, ?_⟩
+          match hba : b.args, hbl with
+          | [(q, M)], _ => exact ⟨q, by rw [hba] at hbD; simp at hbD; rw [hbD]⟩
+    · simp at h
+  · simp at h
+
+theorem elimPinR_ok (V : LV) (x : ℕ) (D : DMon) (ats : List Atom) (ds ps : List Fac) (e : AElim)
+    (h : elimPinR x D ats ds ps = some e) : AElimOK V x D ats ds ps e := by
+  unfold elimPinR at h
+  by_cases hx0 : (ids ats).contains x = true
+  · rw [if_pos hx0] at h; simp at h
+  rw [if_neg hx0] at h
+  split at h
+  · next p u hfs =>
+    by_cases hc : (wfA ats && decide (ids ats).Nodup &&
+        wfA (ats.filter (fun a => !atReads x a) ++ ats.filter (atReads x))) = true
+    swap
+    · rw [if_neg hc] at h; simp at h
+    rw [if_pos hc] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨⟨hw, hn⟩, hw'⟩ := hc
+    simp only [List.contains_eq_mem, decide_eq_true_eq] at hx0
+    obtain ⟨sp, hsp, hpu⟩ := firstSome_spec _ _ _ hfs
+    simp only [Option.map_eq_some_iff, Prod.mk.injEq] at hpu
+    obtain ⟨u', hu', rfl, rfl⟩ := hpu
+    set A := ats.filter (fun a => !atReads x a)
+    set B := ats.filter (atReads x)
+    obtain ⟨hfD, hDc, hD0, s, c, hs, hsc, hval, b, hbA, hbid, hbf, q, hbq⟩ :=
+      pinROf_spec x D A _ u' hu'
+    have hds := splits_spec ds sp hsp
+    have hp : (A ++ B).Perm ats := by
+      have := List.filter_append_perm (fun a => !atReads x a) ats
+      simpa [A, B, Bool.not_not] using this
+    have hnAB : (ids (A ++ B)).Nodup := by
+      simpa [ids] using (hp.map Atom.id).nodup_iff.2 (by simpa [ids] using hn)
+    have hwA : wfA A = true := wfA_append A B hw'
+    have hnA : (ids A).Nodup := (List.nodup_append.1 (by simpa [ids] using hnAB)).1
+    have huA : u' ∈ ids A := hbid ▸ List.mem_map_of_mem hbA
+    have huB : u' ∉ ids B := fun h' => by
+      have := List.disjoint_of_nodup_append (by simpa [ids] using hnAB)
+      exact this huA (by simpa [ids] using h')
+    have hxA : x ∉ argVs A ++ ids A := by
+      simp only [List.mem_append, not_or]
+      constructor
+      · simp only [argVs, List.mem_flatMap, not_exists, not_and]
+        intro a ha hxa
+        simp only [A, List.mem_filter, Bool.not_eq_true'] at ha
+        simp [atReads, hxa] at ha
+      · intro hxi
+        apply hx0
+        simp only [ids] at hxi ⊢
+        exact (List.filter_sublist.map _).subset hxi
+    have hxB : x ∉ ids B := fun hxi => hx0 (by
+      simp only [ids] at hxi ⊢; exact (List.filter_sublist.map _).subset hxi)
+    have hxu : x ≠ u' := fun e => hxA (List.mem_append_right _ (e ▸ huA))
+    intro ν
+    have hrw : ∀ j : ℤ, aext V ats (Function.update ν x j) =
+        aext V B (Function.update (aext V A ν) x j) := by
+      intro j
+      rw [aext_perm V ats (A ++ B) hp hw hw' hn, aext_append, aext_upd V A x hxA]
+    set E := aext V A ν
+    have hden : D.den V.ρ.dv = D.c := DMon.den_isConst _ _ hDc
+    have hEu : 0 ≤ E u' ∧ E u' < (D.c : ℤ) := by
+      have hfix := aext_fix V A hwA hnA ν b hbA
+      rw [hbid] at hfix
+      rw [show E u' = _ from hfix]
+      simp only [aval, hbf, show (2 : ℕ) < 100 by norm_num, if_true, bfn, hbq, List.map_cons,
+        List.map_nil, List.getD_cons_zero, argV, hden]
+      exact ⟨Int.emod_nonneg _ (by omega), Int.emod_lt_of_pos _ (by omega)⟩
+    set g : ℤ → ℂ := fun j =>
+      bodyOf V.ρ.dv (sp.1 ++ sp.2.2) ps (aext V B (Function.update E x j))
+    have hsplit : ∀ j : ℤ, bodyOf V.ρ.dv ds ps (aext V ats (Function.update ν x j)) =
+        (if (D.c : ℤ) ∣ j - E u' then g j else 0) := by
+      intro j
+      rw [hrw j]
+      have hF : ∀ y ∉ ids B, aext V B (Function.update E x j) y = Function.update E x j y :=
+        fun y hy => aext_off V B _ y hy
+      have hd : delV V.ρ.dv (aext V B (Function.update E x j)) sp.2.1 =
+          if (D.c : ℤ) ∣ j - E u' then 1 else 0 := by
+        unfold delV
+        rw [hval, hF x hxB, hF u' huB, Function.update_self, Function.update_of_ne hxu.symm, hfD,
+          hden]
+        have hiff : (D.c : ℤ) ∣ s * j + c * E u' ↔ (D.c : ℤ) ∣ j - E u' := by
+          have hdc : (D.c : ℤ) ∣ s + c := Int.dvd_of_emod_eq_zero hsc
+          constructor
+          · intro h1
+            have h2 : (D.c : ℤ) ∣ s * (s * j + c * E u') - s * ((s + c) * E u') :=
+              dvd_sub (dvd_mul_of_dvd_right h1 _) (dvd_mul_of_dvd_right (Dvd.dvd.mul_right hdc _) _)
+            have e2 : s * (s * j + c * E u') - s * ((s + c) * E u') = j - E u' := by
+              rcases hs with rfl | rfl <;> ring
+            rwa [e2] at h2
+          · intro h1
+            rw [show s * j + c * E u' = s * (j - E u') + (s + c) * E u' by ring]
+            exact dvd_add (dvd_mul_of_dvd_right h1 _) (Dvd.dvd.mul_right hdc _)
+        simp only [hiff]
+      rw [hds]
+      simp only [g, bodyOf, List.map_append, List.map_cons, List.prod_append, List.prod_cons, hd]
+      split_ifs <;> ring
+    rw [Finset.sum_congr rfl fun (j : ℕ) _ => hsplit (j : ℤ), hden,
+      sum_pin_exact D.c (Nat.pos_of_ne_zero hD0) (E u') g, Int.emod_eq_of_lt hEu.1 hEu.2,
+      ofQ_den, Rat.cast_one, one_mul, aext_append]
+    have hpl : plainP B (ipV u') = true := by
+      simp only [plainP, ipVs, ipV, List.flatMap_cons, List.flatMap_nil, List.append_nil,
+        List.all_cons, List.all_nil, Bool.and_true, Bool.not_eq_true', List.contains_eq_mem,
+        decide_eq_false_iff_not]
+      exact huB
+    have hhs : ipHas x (ipV u') = false := by
+      simp [ipHas, ipV, hxu]
+    have e1 := aext_sub V B x hxB (ipV u') hpl hhs E
+    have hEu' : ipDen E (ipV u') = E u' := by simp [ipDen, ipV, imDen]
+    rw [hEu'] at e1
+    simp only [g]
+    rw [e1, bodyOf_sub]
+    have hB'u : aext V (B.map (atSub x (ipV u'))) E u' = E u' :=
+      aext_off V _ E u' (by simpa [ids, atSub, List.map_map, Function.comp_def] using huB)
+    simp only [ipDen, ipV, imDen, List.map_cons, List.map_nil, List.prod_cons, List.prod_nil,
+      mul_one, List.sum_cons, List.sum_nil, add_zero, one_mul] at hB'u ⊢
+    rw [hB'u]
+  · simp at h
+
 /-! ## Roots of unity of a smaller order -/
 
 theorem sum_om_pow (d k : ℕ) (hd : 2 ≤ d) (A B : ℤ) :

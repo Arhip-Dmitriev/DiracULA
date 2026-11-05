@@ -371,7 +371,51 @@ def a_elim_var(
     e = elim_pin_a(x, d, ats, ds, ps)
     if e is not None:
         return e
-    return elim_lin_c(pw, x, d, ats, ds, ps)
+    e = elim_lin_c(pw, x, d, ats, ds, ps)
+    if e is not None:
+        return e
+    return elim_pin_r(x, d, ats, ds, ps)
+
+
+def pin_r_of(x: int, d: Y.DMon, a: Sequence[Atom], f: Y.Fac) -> int | None:
+    if f[0] != d or not (Y.dm_const(d) and d[0] != 0):
+        return None
+    lin = Y.ip_lin(x, f[1])
+    if lin is None:
+        return None
+    s = Y.ip_const(lin[0])
+    b = lin[1]
+    if s not in (1, -1) or len(b) != 1 or len(b[0][0]) != 1:
+        return None
+    (u,), c = b[0]
+    bu = find_at(a, u)
+    if bu is None or bu[1] != 2 or len(bu[4]) != 1 or bu[4][0][1] != d:
+        return None
+    return u if Y._emod(s + c, d[0]) == 0 else None
+
+
+def elim_pin_r(
+    x: int, d: Y.DMon, ats: tuple[Atom, ...], ds: tuple[Y.Fac, ...], ps: tuple[Y.Fac, ...]
+) -> AElim | None:
+    a = tuple(b for b in ats if x not in at_vs(b))
+    bt = tuple(b for b in ats if x in at_vs(b))
+    i = ids(ats)
+    if x in i:
+        return None
+    for pre, f, post in Y._splits(ds):
+        u = pin_r_of(x, d, a, f)
+        if u is None:
+            continue
+        if not (wf_a(ats) and len(i) == len(set(i)) and wf_a(a + bt)):
+            return None
+        v = Y.ip_v(u)
+        return (
+            Y.of_q(1),
+            a + tuple(at_sub(x, v, t) for t in bt),
+            tuple(Y.fac_sub(x, v, g) for g in (*pre, *post)),
+            tuple(Y.fac_sub(x, v, g) for g in ps),
+        )
+    return None
 
 
 def elim_lin_c(
@@ -1233,6 +1277,52 @@ def red_at(
     return (t[0], t[1], (*pre, a2, *post), t[3], t[4])
 
 
+def eq_del_of(ats: Sequence[Atom], f: Y.Fac) -> tuple[int, int] | None:
+    p = f[1]
+    if len(p) != 2 or len(p[0][0]) != 1 or len(p[1][0]) != 1:
+        return None
+    (a,), ca = p[0]
+    (b,), cb = p[1]
+    d = f[0]
+    if not (
+        Y.dm_const(d)
+        and d[0] != 0
+        and ca in (1, -1)
+        and Y._emod(ca + cb, d[0]) == 0
+        and is_red(ats, a, d)
+        and is_red(ats, b, d)
+        and a != b
+    ):
+        return None
+    fa, fb = find_at(ats, a), find_at(ats, b)
+    assert fa is not None and fb is not None
+    return (b, a) if z_lt(at_key(fb), at_key(fa)) else (a, b)
+
+
+def eq_at(fl: Sequence[int], t: ATm) -> ATm | None:
+    for pre, f, post in Y._splits(t[3]):
+        o = eq_del_of(t[2], f)
+        if o is None:
+            continue
+        u, w = o
+        v = Y.ip_v(u)
+        rest = (*pre, *post)
+        i = ids(t[2])
+        if (
+            wf_a(t[2])
+            and len(i) == len(set(i))
+            and (any(w in Y.fac_vars(g) for g in rest) or any(w in Y.fac_vars(g) for g in t[4]))
+        ):
+            return (
+                t[0],
+                t[1],
+                t[2],
+                (*(Y.fac_sub(w, v, g) for g in pre), f, *(Y.fac_sub(w, v, g) for g in post)),
+                tuple(Y.fac_sub(w, v, g) for g in t[4]),
+            )
+    return None
+
+
 def p_rule1(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
     for fn in (
         cst_at,
@@ -1252,6 +1342,9 @@ def p_rule1(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> A
             r = fn(fl, pw, t, pre, a, post)
             if r is not None:
                 return r
+    r = eq_at(fl, t)
+    if r is not None:
+        return r
     return false_at(fl, t)
 
 
@@ -1501,3 +1594,45 @@ def close2(
 ) -> bool:
     r = nf_a(fl, pw, x_pass(c, e))
     return not r or not nf_a(fl, pw, x_pass(c, list(r)))
+
+
+# real coefficient atoms
+
+
+def real_c(j: int, m: Y.CMon) -> Y.CMon:
+    am = list(m[4])
+    c = am[2 * j + 1] if 2 * j + 1 < len(am) else 0
+    if 2 * j + 1 < len(am):
+        am[2 * j + 1] = 0
+    return Y.cm_mul((m[0], m[1], m[2], m[3], tuple(am), m[5]), Y.atom_p(2 * j, c))
+
+
+def real_t(rs: Sequence[int], t: ATm) -> ATm:
+    c = t[0]
+    for j in rs:
+        c = real_c(j, c)
+    return (c, t[1], t[2], t[3], t[4])
+
+
+# free variables in range
+
+
+def rg_one(v: int, d: Y.DMon, t: ATm) -> ATm:
+    if v not in fvs(t) + arg_vs(t[2]) or v in abvs(t) or v in ids(t[2]):
+        return t
+    u = max_v(t) + 1
+    w = Y.ip_v(u)
+    a = (u, 2, (), (), ((Y.ip_v(v), d),))
+    return (
+        t[0],
+        t[1],
+        (a, *(at_sub(v, w, b) for b in t[2])),
+        tuple(Y.fac_sub(v, w, f) for f in t[3]),
+        tuple(Y.fac_sub(v, w, f) for f in t[4]),
+    )
+
+
+def rg_t(rg: Sequence[tuple[int, Y.DMon]], t: ATm) -> ATm:
+    for v, d in rg:
+        t = rg_one(v, d, t)
+    return t

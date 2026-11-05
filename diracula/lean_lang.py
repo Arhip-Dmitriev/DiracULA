@@ -419,6 +419,7 @@ class Vars:
     divs: list[tuple[sympy.Expr, sympy.Expr]] = field(default_factory=list)
     default: sympy.Expr | None = None
     catoms: list[sympy.Symbol] = field(default_factory=list)
+    anchors: dict[tuple[sympy.Expr, sympy.Symbol], int] = field(default_factory=dict)
     funcs: list[str] = field(default_factory=list)
     needs_width: bool = False
     next_bound: int = BV
@@ -494,10 +495,11 @@ class Vars:
                 a, b = (int(x) for x in p.all_coeffs())
                 if a < 1:
                     raise CertifyError(f"the size {e}")
-                if b < 0:
+                c0 = self.anchors.get((base, n), 0)
+                if b - a * c0 < 0:
                     out *= self.power(base, a * n + b)
                 else:
-                    out *= self.power(base, n) ** a * base**b
+                    out *= self.power(base, n + c0) ** a * base ** (b - a * c0)
             else:
                 out *= f
         if isinstance(c, sympy.Integer) and int(c) > 1:
@@ -907,8 +909,9 @@ class Vars:
                 cs = poly.all_coeffs()
                 if poly.degree() == 1 and all(c.is_Integer for c in cs):
                     a, b = int(cs[0]), int(cs[1])
-                    m = Y.rt_d(self.dmon(self.power(base, n)), a)
-                    return Y.cm_mul(m, Y.rt_d(self.dmon(base), b)), []
+                    c0 = self.anchors.get((base, n), 0)
+                    m = Y.rt_d(self.dmon(self.power(base, n + c0)), a)
+                    return Y.cm_mul(m, Y.rt_d(self.dmon(base), b - a * c0)), []
         raise CertifyError(f"the amplitude factor {f}")
 
 
@@ -1496,6 +1499,8 @@ class Certifier:
         self.wl_used: list[tuple[int, Y.DMon, Y.DMon]] = []
         self.ctx_any = False
         self.ctx_used = False
+        self.real_rs: list[int] = []
+        self.real_any: list[int] = []
         self.gate_layouts: dict[object, Layout] = {}
         self.rounds = 1
         self.nfs2: list[ATm | None] = []
@@ -2101,8 +2106,30 @@ class Certifier:
 
     # the theorem
 
+    def anchor(self, base: Any, k: Any) -> None:
+        """Lowers the anchor offset of ``base^(n + c)`` for an exponent ``k = n + c``."""
+        k = sympy.sympify(k)
+        if base is None or len(k.free_symbols) != 1:
+            return
+        (n,) = k.free_symbols
+        p = sympy.Poly(k, n)
+        if p.degree() != 1 or not all(x.is_Integer for x in p.all_coeffs()):
+            return
+        a, b = (int(x) for x in p.all_coeffs())
+        if a == 1 and b < self.vs.anchors.get((base, n), 0):
+            self.vs.anchors[(base, n)] = b
+
     def setup(self, upto: int) -> None:
         self.upto = upto
+        for ev in self.log:
+            if isinstance(ev.value, State):
+                for w, d in zip(ev.value.widths, ev.value.dims, strict=True):
+                    if w is not None:
+                        self.anchor(d, w)
+                    if d is not None:
+                        for f in sympy.preorder_traversal(sympy.sympify(d)):
+                            if isinstance(f, sympy.Pow):
+                                self.anchor(f.base, f.exp)
         self.vs.divs = []
         for a in self.assumptions:
             if isinstance(a, sympy.Eq) and a.rhs == 0 and isinstance(a.lhs, sympy.Mod):
@@ -2110,8 +2137,16 @@ class Certifier:
         for ev in self.log[:upto]:
             if isinstance(ev.value, State):
                 for d in ev.value.dims:
+                    ex: set[sympy.Basic] = set()
+                    for f in sympy.preorder_traversal(sympy.sympify(d)) if d is not None else ():
+                        if isinstance(f, sympy.Pow):
+                            ex |= f.exp.free_symbols
                     for s in sympy.sympify(d).free_symbols if d is not None else ():
-                        self.vs.dim(s)
+                        if s in ex:
+                            if s not in self.vs.widths:
+                                self.vs.widths.append(s)
+                        else:
+                            self.vs.dim(s)
                 for w in ev.value.widths:
                     for s in sympy.sympify(w).free_symbols if w is not None else ():
                         if s not in self.vs.widths:
@@ -2174,11 +2209,24 @@ class Certifier:
             self.wl_used = self.wl() if ok else []
             self.ctx_used = ok
             self.ctx_any = self.ctx_any or ok
+        self.real_rs = []
+        rs = [k for k, c in enumerate(self.vs.catoms) if c.is_integer]
+        if not ok and rs:
+            e0 = prog_sym(p, self.floors(), self.vs.pw)
+            if e0 is not None and not Z.nf_a(
+                self.floors(), self.vs.pw, [Z.real_t(rs, t) for t in e0 + Z.ax_neg(rhs)]
+            ):
+                ok, self.real_rs, self.ctx_used, self.rounds = True, rs, False, 1
+                self.real_any = sorted(set(self.real_any) | set(rs))
         if not ok:
             raise CertifyError("the normaliser does not close the difference")
         e = prog_sym(p, self.floors(), self.vs.pw)
         assert e is not None
         fl, pw = self.floors(), self.vs.pw
+        if self.real_rs:
+            ns0 = [Z.real_t(self.real_rs, t) for t in e + Z.ax_neg(rhs)]
+            self.sym, self.nfs, self.nfs2 = e, [Z.norm_a(fl, pw, Z.AROUNDS, t) for t in ns0], []
+            return []
         e2 = Z.x_pass(self.ctx(), e) if self.ctx_used else e
         ns = [Z.norm_a(fl, pw, Z.AROUNDS, t) for t in e2 + Z.ax_neg(rhs)]
         self.nfs2 = []
@@ -2239,6 +2287,10 @@ class Certifier:
         )
 
     def lit_proof(self, p: Prog, r: str, k: str) -> str:
+        if self.real_rs:
+            return (
+                f"certify_real_c V hρ FL FLOK PW PWOK RS RSOK {p.name} {r} SYM{k} NF{k} " + DECIDES
+            )
         if self.ctx_used:
             _, names = self.wl_intro()
             if self.rounds == 2:
@@ -2255,6 +2307,11 @@ class Certifier:
         return f"certify_lit V hρ FL FLOK PW PWOK {p.name} {r} SYM{k} NF{k} " + DECIDES
 
     def lit_stmt(self, p: Prog, r: str) -> str:
+        if self.real_rs:
+            return (
+                f"∀ ν : ℕ → ℤ, (∀ c ∈ {p.name}.counts, 0 ≤ ipDen ν c) → "
+                f"{p.name}.sem V ν = axDen V ν {r}"
+            )
         if self.ctx_used:
             hyps, _ = self.wl_intro()
             return (
@@ -2328,6 +2385,25 @@ class Certifier:
             [],
         )
 
+    def lit_use(self, p: Prog, proof: str, hc: str) -> tuple[list[tuple[str, str]], str]:
+        """The hypotheses of the last ``lit`` check of ``p`` and its proof applied at ``ν``."""
+        cnt = (hc, f"∀ c ∈ {p.name}.counts, 0 ≤ ipDen ν c")
+        if self.ctx_used:
+            hyps = [(f"h_ν{v}", f"ν {v} = ({n} : ℤ)") for v, n in self.wl_hyps()]
+            names = " ".join(a for a, _ in hyps)
+            return [*hyps, cnt], f"(({proof}) ν {names} {hc})"
+        if counts(p) or self.real_rs:
+            return [cnt], f"(({proof}) ν {hc})"
+        return [], f"(congrFun ({proof}) ν)"
+
+    @staticmethod
+    def binders(hyps: Sequence[tuple[str, str]]) -> tuple[str, str]:
+        """``(a : T) → ...`` text of distinct hypotheses and their names."""
+        seen: dict[str, str] = {}
+        for a, t in hyps:
+            seen.setdefault(a, t)
+        return "".join(f"({t}) → " for t in seen.values()), " ".join(seen)
+
     def certify_norm(
         self, label: str, node: Any, values: Mapping[str, object], value: State, norm: sympy.Expr
     ) -> str:
@@ -2348,8 +2424,7 @@ class Certifier:
         )
         sa = self.declare(("nrm_a",), "scaled", f"k s of {label}", Prog("mul", (kleaf, psi)))
         da, pa = self.lit(sa, state_terms(self.vs, value), "_a", f"The printed value of {label}.")
-        if self.ctx_used or counts(sa):
-            raise CertifyError("normalise of a state with loops")
+        ha, ua = self.lit_use(sa, pa, "hc_a")
         sb = self.declare(
             ("nrm_b",),
             "unit",
@@ -2357,18 +2432,17 @@ class Certifier:
             Prog("mul", (Prog("mul", (kleaf, kleaf)), inn)),
         )
         db, pb = self.lit(sb, scalar_terms(self.vs, sympy.Integer(1)), "_b", "One.")
-        if self.ctx_used or counts(sb):
-            raise CertifyError("normalise of a state with loops")
+        hb, ub = self.lit_use(sb, pb, "hc_b")
+        bind, names = self.binders(ha + hb)
         kdecl = (
             f"/-- The coefficient k = 1/({norm}). -/\ndef KT : ATm :=\n  {self.text.tm(kt[0])}\n"
         )
         stmt = (
-            f"∀ ν : ℕ → ℤ, axDen V ν R_a = "
+            f"∀ ν : ℕ → ℤ, {bind}axDen V ν R_a = "
             f"((Real.sqrt ({inn.name}.sem V ν).re : ℝ) : ℂ)⁻¹ * {psi.name}.sem V ν"
         )
         proof = (
-            f"fun ν => nrm_cert V hρ _ {psi.name} R_a KT (by decide +kernel) ν "
-            f"(congrFun ({pa}) ν) (congrFun ({pb}) ν)"
+            f"fun ν {names} => nrm_cert V hρ _ {psi.name} R_a KT (by decide +kernel) ν {ua} {ub}"
         )
         return self.source(
             label, f"{self.script}_show_{_clean(label)}", stmt, proof, [kdecl, da, db], []
@@ -2416,6 +2490,30 @@ class Certifier:
                     continue
         raise CertifyError("an operator of unknown layout")
 
+    def check_rg(self, p: Prog, rhs: Sequence[ATm], rg: Sequence[tuple[int, Y.DMon]]) -> None:
+        """The hints of a closing check with the variables of ``rg`` in their ranges."""
+        fl, pw = self.floors(), self.vs.pw
+        e = prog_sym(p, fl, pw)
+        if e is None:
+            raise CertifyError("the program does not translate")
+        d = [Z.rg_t(rg, t) for t in e + Z.ax_neg(rhs)]
+        if Z.nf_a(fl, pw, d):
+            raise CertifyError("the normaliser does not close the difference")
+        self.sym, self.nfs, self.nfs2, self.rounds = (
+            e,
+            [Z.norm_a(fl, pw, Z.AROUNDS, t) for t in d],
+            [],
+            1,
+        )
+        self.ctx_used, self.real_rs = False, []
+
+    def rg_decl(self, rg: Sequence[tuple[int, Y.DMon]]) -> str:
+        items = ", ".join(f"({v}, {self.text.dm(d)})" for v, d in rg)
+        return (
+            "/-- The output and input variables with their ranges `0 ≤ ν v < D`. -/\n"
+            f"def RG : List (ℕ × DMon) := [{items}]\n"
+        )
+
     def certify_op(self, label: str, node: object, values: Mapping[str, object], value: Any) -> str:
         """The Lean source certifying that the shown operator ``node`` equals its printed form."""
         self.setup(len(self.log))
@@ -2429,20 +2527,31 @@ class Certifier:
         er = prog_sym(pr, self.floors(), self.vs.pw)
         if er is None:
             raise CertifyError("the printed operator does not translate")
-        self.check(pl, er)
+        if counts(pl) or counts(pr):
+            raise CertifyError("an operator with loops")
+        rgd: list[str] = []
+        try:
+            self.check(pl, er)
+            if self.real_rs or self.ctx_used:
+                raise CertifyError("an operator with facts about its parameters")
+            stmt = f"{pl.name}.sem V = {pr.name}.sem V"
+            proof = f"certify_eq_lit V hρ FL FLOK PW PWOK {pl.name} {pr.name} SYM RSYM NF "
+        except CertifyError:
+            levels = self.levels(lay)
+            rg = [(i, m) for i, m in enumerate(levels)] + [
+                (IN + i, m) for i, m in enumerate(levels)
+            ]
+            self.check_rg(pl, er, rg)
+            rgd = [self.rg_decl(rg)]
+            stmt = f"∀ ν : ℕ → ℤ, RgOK V RG ν → {pl.name}.sem V ν = {pr.name}.sem V ν"
+            proof = f"certify_eq_rg V hρ FL FLOK PW PWOK RG {pl.name} {pr.name} SYM RSYM NF "
+        proof += DECIDES + " (by decide +kernel) (by decide +kernel)"
         extra = [
+            *rgd,
             "/-- The printed operator as one expression. -/\ndef RSYM : List ATm :=\n  "
             + f"{self.text.ex(er)}\n",
             *self.hint_decls(),
         ]
-        stmt = f"{pl.name}.sem V = {pr.name}.sem V"
-        proof = (
-            f"certify_eq_lit V hρ FL FLOK PW PWOK {pl.name} {pr.name} SYM RSYM NF "
-            + DECIDES
-            + " (by decide +kernel) (by decide +kernel)"
-        )
-        if counts(pl) or counts(pr):
-            raise CertifyError("an operator with loops")
         return self.source(label, f"{self.script}_show_{_clean(label)}", stmt, proof, extra, [])
 
     def certify_action(
@@ -2468,8 +2577,27 @@ class Certifier:
             Prog("app", (self.levels(lay), q, pin)),
         )
         rhs = state_terms(self.vs, image)
-        self.check(pl, rhs)
+        rgd: list[str] = []
+        try:
+            self.check(pl, rhs)
+            if self.real_rs:
+                raise CertifyError("an operator with real parameters under conjugation")
+            stmt, proof = self.lit_stmt(pl, "printed"), self.lit_proof(pl, "printed", "")
+        except CertifyError:
+            if counts(pl):
+                raise
+            levels = self.levels(lay)
+            ins = []
+            for i, v in enumerate(probe.terms[0].kets):
+                for x in sympy.sympify(v).free_symbols:
+                    ins.append((self.vs.ids[x], levels[i]))
+            rg = [(i, m) for i, m in enumerate(levels)] + ins
+            self.check_rg(pl, rhs, rg)
+            rgd = [self.rg_decl(rg)]
+            stmt = f"∀ ν : ℕ → ℤ, RgOK V RG ν → {pl.name}.sem V ν = axDen V ν printed"
+            proof = f"certify_rg V hρ FL FLOK PW PWOK RG {pl.name} printed SYM NF " + DECIDES
         extra = [
+            *rgd,
             (
                 f"/-- The printed image of the basis ket under {label}. -/\n"
                 "def printed : List ATm :=\n  "
@@ -2477,14 +2605,7 @@ class Certifier:
             ),
             *self.hint_decls(),
         ]
-        return self.source(
-            label,
-            f"{self.script}_show_{_clean(label)}",
-            self.lit_stmt(pl, "printed"),
-            self.lit_proof(pl, "printed", ""),
-            extra,
-            [],
-        )
+        return self.source(label, f"{self.script}_show_{_clean(label)}", stmt, proof, extra, [])
 
     def certify_scalar(
         self, name: str, node: object, upto: int, values: Mapping[str, object], value: sympy.Expr
@@ -2539,7 +2660,17 @@ class Certifier:
             ),
             *self.hint_decls(),
         ]
-        if self.ctx_used:
+        if self.real_rs:
+            stmt = (
+                f"∀ ν : ℕ → ℤ, (∀ c ∈ {pl.name}.counts ++ {pr.name}.counts, 0 ≤ ipDen ν c) "
+                f"→ {pl.name}.sem V ν = {pr.name}.sem V ν"
+            )
+            proof = (
+                f"certify_eq_real_c V hρ FL FLOK PW PWOK RS RSOK {pl.name} {pr.name} SYM RSYM NF "
+                + DECIDES
+                + " (by decide +kernel) (by decide +kernel)"
+            )
+        elif self.ctx_used:
             hyps, names = self.wl_intro()
             stmt = (
                 f"∀ ν : ℕ → ℤ, {hyps}(∀ c ∈ {pl.name}.counts ++ {pr.name}.counts, "
@@ -3073,8 +3204,8 @@ class Certifier:
                 Prog("mul", (Prog("mul", (kleaf, kleaf)), inn)),
             )
             db, pb = self.lit(sb, scalar_terms(self.vs, sympy.Integer(1)), f"_n{i}", "One.")
-            if self.ctx_used or counts(sb):
-                raise CertifyError("normalise of a state with loops")
+            hyb, ub = self.lit_use(sb, pb, "hc")
+            bind, hnames = self.binders(hyb)
             extra += [
                 f"/-- The coefficient 1/({norm}). -/\ndef KT_n{i} : ATm :=\n  {self.text.tm(kt)}\n",
                 db,
@@ -3084,12 +3215,12 @@ class Certifier:
                     f"normalise #{i} is its argument over the root of its norm",
                     f"{thm}_nrm_{i}",
                     (
-                        f"∀ ν : ℕ → ℤ, (Prog.mul (.leaf [KT_n{i}]) {psi.name}).sem V ν = "
+                        f"∀ ν : ℕ → ℤ, {bind}(Prog.mul (.leaf [KT_n{i}]) {psi.name}).sem V ν = "
                         f"((Real.sqrt ({inn.name}.sem V ν).re : ℝ) : ℂ)⁻¹ * {psi.name}.sem V ν"
                     ),
                     (
-                        f"fun ν => nrm_scale V hρ _ {psi.name} KT_n{i} (by decide +kernel) ν "
-                        f"(congrFun ({pb}) ν)"
+                        f"fun ν {hnames} => nrm_scale V hρ _ {psi.name} KT_n{i} "
+                        f"(by decide +kernel) ν {ub}"
                     ),
                 )
             )
@@ -3132,6 +3263,23 @@ class Certifier:
             pw_cases.append(
                 f"  · exact ⟨by simp [{dnames}, DMon.den, npow] <;> omega, {ex}, "
                 f"by simp [{dnames}, DMon.den, npow, {hname}]⟩"
+            )
+        rs_lines: list[str] = []
+        rsok = ""
+        if self.real_any:
+            for k in self.real_any:
+                c = f"V.ρ.atom {2 * k}"
+                hyps.append((f"h_re_{_clean(vs.catoms[k].name)}", f"starRingEnd ℂ ({c}) = {c}"))
+            pats = " | ".join(["rfl"] * len(self.real_any))
+            rs_lines = [
+                (
+                    "/-- The coefficient atoms of integer parameters, real. -/\n"
+                    f"def RS : List ℕ := {lean_nats(self.real_any)}\n"
+                )
+            ]
+            rsok = (
+                "(fun j hj => by simp only [RS, List.mem_cons, List.not_mem_nil, or_false] at hj; "
+                f"rcases hj with {pats} <;> assumption)"
             )
         hyp_text = " ".join(f"({a} : {b})" for a, b in hyps)
         args_text = " ".join(a for a, _ in hyps)
@@ -3271,6 +3419,7 @@ class Certifier:
             f"  {fl_proof}\n",
             f"theorem pwOK (V : LV){sep}{hyp_text} : PowOK PW V.ρ := {pw_proof}\n",
             *ctx_lines,
+            *rs_lines,
         ]
         for w, t, st, pr in [(what, thm, stmt, proof), *more]:
             if not t:
@@ -3282,7 +3431,8 @@ class Certifier:
                 f"theorem {t} (V : LV) (hρ : V.ρ.OK){sep}{hyp_text} :",
                 f"    {st} :=",
                 "  "
-                + pr.replace("FLOK", flok)
+                + pr.replace("RSOK", rsok)
+                .replace("FLOK", flok)
                 .replace("PWOK", pwok)
                 .replace("CTXOK", ctxok)
                 .replace("⟪ASM⟫", ""),

@@ -700,4 +700,95 @@ theorem close2_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.�
       ← axDen_xpass V hρ C _ ν hC]
     exact nfA_zero V hρ fl hfl PW hPW _ h ν
 
+/-! ## Free variables in their ranges -/
+
+/-- `v` read through a new atom `mod(v, D)` in every factor and atom of `t`. -/
+def rgOne (v : ℕ) (D : DMon) (t : ATm) : ATm :=
+  if (fvs t ++ argVs t.ats).contains v && !(abvs t).contains v && !(ids t.ats).contains v then
+    ⟨t.c, t.sums, ⟨maxV t + 1, 2, [], [], [(ipV v, D)]⟩ :: t.ats.map (atSub v (ipV (maxV t + 1))),
+      t.dels.map (facSub v (ipV (maxV t + 1))), t.phs.map (facSub v (ipV (maxV t + 1)))⟩
+  else t
+
+/-- `rgOne` for each variable and range of `rg`. -/
+def rgT (rg : List (ℕ × DMon)) (t : ATm) : ATm := rg.foldl (fun t p => rgOne p.1 p.2 t) t
+
+/-- Every variable of `rg` lies in its range at `ν`. -/
+def RgOK (V : LV) (rg : List (ℕ × DMon)) (ν : ℕ → ℤ) : Prop :=
+  ∀ p ∈ rg, 0 ≤ ν p.1 ∧ ν p.1 < (p.2.den V.ρ.dv : ℤ)
+
+theorem rgOne_ok (V : LV) (v : ℕ) (D : DMon) (t : ATm) (ν : ℕ → ℤ) (h0 : 0 ≤ ν v)
+    (h1 : ν v < (D.den V.ρ.dv : ℤ)) : (rgOne v D t).den V ν = t.den V ν := by
+  unfold rgOne
+  split_ifs with hc
+  · simp only [Bool.and_eq_true, Bool.not_eq_true', List.contains_eq_mem, decide_eq_true_eq,
+      decide_eq_false_iff_not] at hc
+    obtain ⟨⟨hr, hb⟩, hi⟩ := hc
+    set B := maxV t + 1
+    have hlt : ∀ w ∈ allV t, w < B := fun w hw => Nat.lt_succ_of_le (le_foldr_max _ w hw)
+    have hBi : B ∉ ids t.ats := fun h => by
+      have := hlt B (by simp only [allV, rvs, List.mem_append]; tauto); omega
+    have hBa : B ∉ argVs t.ats := fun h => by
+      have := hlt B (by simp only [allV, rvs, List.mem_append]; tauto); omega
+    have hBf : B ∉ fvs t := fun h => by
+      have := hlt B (by simp only [allV, rvs, List.mem_append]; tauto); omega
+    have hvB : v ≠ B := by
+      intro e
+      have := hlt v (by
+        simp only [List.mem_append] at hr
+        simp only [allV, rvs, List.mem_append]; tauto)
+      omega
+    unfold ATm.den
+    simp only
+    congr 1
+    refine sumsV_congr_off _ _ [v] _ _ (fun p hp hv => ?_) ν fun μ hμ => ?_
+    · simp only [List.mem_singleton] at hv
+      exact hb (by rw [← hv]; exact List.mem_map_of_mem hp)
+    · have hμv : μ v = ν v := hμ v (by simp)
+      unfold abody
+      simp only [aext]
+      have hav : aval V μ ⟨B, 2, [], [], [(ipV v, D)]⟩ = μ v := by
+        simp only [aval, show (2 : ℕ) < 100 by norm_num, if_true, bfn, List.map_cons,
+          List.map_nil, List.getD_cons_zero, argV, ipDen_V]
+        rw [hμv]
+        exact Int.emod_eq_of_lt h0 h1
+      rw [hav]
+      set μ' := Function.update μ B (μ v)
+      have hpl : plainP t.ats (ipV B) = true := by
+        simp only [plainP, ipVs_V, List.all_cons, List.all_nil, Bool.and_true, Bool.not_eq_true',
+          List.contains_eq_mem, decide_eq_false_iff_not]
+        exact hBi
+      have hhs : ipHas v (ipV B) = false := by
+        simp only [ipHas, ipV, List.any_cons, List.any_nil, Bool.or_false, List.contains_cons,
+          List.contains_nil, Bool.or_false, beq_eq_false_iff_ne, ne_eq]
+        simp [hvB]
+      have e1 := aext_sub V t.ats v hi (ipV B) hpl hhs μ'
+      have hμ'B : μ' B = μ v := Function.update_self _ _ _
+      have hμ'v : Function.update μ' v (μ v) = μ' := by
+        rw [show μ v = μ' v from (Function.update_of_ne hvB _ _).symm, Function.update_eq_self]
+      rw [ipDen_V, hμ'B, hμ'v] at e1
+      have hBi' : B ∉ ids (t.ats.map (atSub v (ipV B))) := by
+        simpa [ids, atSub, List.map_map, Function.comp_def] using hBi
+      rw [bodyOf_sub, ipDen_V, aext_off V _ μ' B hBi', hμ'B, ← e1]
+      have hup : aext V t.ats μ' = Function.update (aext V t.ats μ) B (μ v) :=
+        aext_upd V t.ats B (by simp only [List.mem_append, not_or]; exact ⟨hBa, hBi⟩) μ (μ v)
+      rw [hup]
+      refine bodyOf_reads _ _ _ _ _ fun y hy => ?_
+      have hyB : y ≠ B := fun e => hBf (by rw [← e]; simpa [fvs] using hy)
+      exact Function.update_of_ne hyB _ _
+  · rfl
+
+theorem rgT_ok (V : LV) (rg : List (ℕ × DMon)) (ν : ℕ → ℤ) (h : RgOK V rg ν) (t : ATm) :
+    (rgT rg t).den V ν = t.den V ν := by
+  unfold rgT
+  induction rg generalizing t with
+  | nil => rfl
+  | cons p rg ih =>
+    simp only [List.foldl_cons]
+    rw [ih (fun q hq => h q (List.mem_cons_of_mem _ hq)),
+      rgOne_ok V p.1 p.2 t ν (h p List.mem_cons_self).1 (h p List.mem_cons_self).2]
+
+theorem axDen_rg (V : LV) (rg : List (ℕ × DMon)) (e : List ATm) (ν : ℕ → ℤ) (h : RgOK V rg ν) :
+    axDen V ν (e.map (rgT rg)) = axDen V ν e := by
+  simp only [axDen, List.map_map, Function.comp_def, rgT_ok V rg ν h]
+
 end DiracULA.LSym

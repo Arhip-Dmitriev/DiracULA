@@ -2060,6 +2060,7 @@ class Interpreter:
             except LangError as exc:
                 raise LL.CertifyError(str(exc)) from exc
             if isinstance(value, P.Operator):
+                value = self._expanded(value) or value
                 act = self._action(value)
                 try:
                     src = cert.certify_op(source, node, dict(self.values), value)
@@ -2237,7 +2238,7 @@ class Interpreter:
 
         for lab, v in entries:
             if isinstance(v, P.Operator):
-                v = self._action(v) or v
+                v = self._action(v) or self._expanded(v) or v
             state = isinstance(v, (P.State, P.Mixed))
             if not state or mode in (NotationMode.DIRAC, NotationMode.BOTH):
                 math.append(r.entry(lab, v, record=not state))
@@ -2808,6 +2809,20 @@ class Interpreter:
             if not isinstance(diff, P.State):
                 raise LangTypeError(f"{op}: the operators do not map kets to kets")
             return rel(_zero_form(P.norm2(diff)), 0)
+
+    def _expanded(self, op: P.Operator) -> P.Operator | None:
+        """A derived operator without gates evaluated on its registers, or None when its
+        registers are unknown or it has no closed form there."""
+        if not isinstance(op, P.Derived) or _has_gate(op):
+            return None
+        layout = self._layout(op)
+        if layout is None:
+            return None
+        try:
+            v = op.at(tuple(w for w, _ in layout), tuple(d for _, d in layout))
+        except (O.OperatorError, P.PathSumError, LangError):
+            return None
+        return None if isinstance(v, P.Derived) else v
 
     def _action(self, op: P.Operator) -> D.Action | None:
         """``op`` as the image of a basis ket of symbolic value, or None when its registers

@@ -1780,34 +1780,148 @@ def _minimal_function(
     return _interpolate(f, eigen, basis)
 
 
+ROOTS: dict[sympy.Symbol, tuple[sympy.Poly, int]] = {}
+"""The eigenvalue symbols ``λ_j``: the ``j``-th root of an irreducible characteristic polynomial."""
+
+WEIGHTS: dict[sympy.Symbol, sympy.Symbol] = {}
+"""The symbol ``w_j = 1/q'(λ_j)`` of each eigenvalue symbol ``λ_j``."""
+
+
+def _plain_radical(r: Expr) -> bool:
+    """Whether ``r`` is built from rationals, ``i`` and square roots of rationals."""
+    if r.has(sympy.CRootOf):
+        return False
+    for g in sympy.preorder_traversal(r):
+        if (
+            isinstance(g, sympy.Pow)
+            and not g.exp.is_Integer
+            and (
+                g.exp not in (sympy.Rational(1, 2), sympy.Rational(-1, 2)) or not g.base.is_Rational
+            )
+        ):
+            return False
+    return True
+
+
+def root_symbols(q: sympy.Poly) -> list[sympy.Symbol]:
+    """The eigenvalue symbols of the roots of ``q``, with their weights."""
+    out = []
+    for j in range(q.degree()):
+        lam = sympy.Symbol(f"λ_{j}", complex=True)
+        w = sympy.Symbol(f"w_{j}", complex=True)
+        ROOTS[lam] = (q, j)
+        WEIGHTS[lam] = w
+        out.append(lam)
+    return out
+
+
+def matrix_spectrum(m: sympy.Matrix) -> tuple[str, object] | None:
+    """``("radical", [(l, idx, alg)])`` with each eigenvalue in square roots over the rationals,
+    its index in the minimal polynomial and its multiplicity; ``("roots", q)`` for an
+    irreducible characteristic polynomial ``q`` whose roots are not; None otherwise."""
+    lam = sympy.Dummy("lambda")
+    cp = m.charpoly(lam).as_expr(lam)
+    factors = sympy.factor_list(cp, lam)[1]
+    eig: list[tuple[Expr, int]] = []
+    hard = False
+    for q, mult in factors:
+        deg = sympy.degree(q, lam)
+        rts = sympy.roots(q, lam) if deg <= 4 else {}
+        if sum(rts.values()) == deg and all(_plain_radical(r) for r in rts):
+            eig += [(r, mult * k) for r, k in rts.items()]
+        else:
+            hard = True
+    if hard:
+        if len(factors) == 1 and factors[0][1] == 1:
+            return "roots", sympy.Poly(factors[0][0], lam)
+        return None
+    out = []
+    for r, alg in eig:
+        n = m - r * sympy.eye(m.rows)
+        idx, prev, pw = 1, n.rank(simplify=True), n
+        while idx < alg:
+            pw = (pw * n).applyfunc(sympy.expand)
+            rk = pw.rank(simplify=True)
+            if rk == prev:
+                break
+            idx, prev = idx + 1, rk
+        out.append((r, idx, alg))
+    return "radical", out
+
+
+def hermite(f: object, c: Expr, spec: Sequence[tuple[Expr, int]]) -> list[Expr]:
+    """The coefficients of the polynomial ``p`` of degree below ``sum m`` with
+    ``p^(r)(l) = (d/dx)^r f(c x)`` at ``x = l`` for ``r < m``, each ``(l, m)`` of ``spec``."""
+    x = sympy.Dummy("x")
+    deg = sum(m for _, m in spec)
+    a = [sympy.Dummy(f"a{k}") for k in range(deg)]
+    p = sum((a[k] * x**k for k in range(deg)), sympy.Integer(0))
+    g = f(c * x)  # type: ignore[operator]
+    eqs = []
+    for lv, m in spec:
+        for r in range(m):
+            eqs.append(sympy.Eq(sympy.diff(p, x, r).subs(x, lv), sympy.diff(g, x, r).subs(x, lv)))
+    sol = sympy.solve(eqs, a, dict=True)
+    if not sol:
+        raise OperatorError("no interpolating polynomial")
+    return [sympy.radsimp(sympy.expand(sol[0][ak])) for ak in a]
+
+
+def root_form(f: object, c: Expr, m: sympy.Matrix, q: sympy.Poly) -> sympy.Matrix:
+    """``sum_j f(c l_j) w_j prod_{k != j} (m - l_k)`` over the eigenvalue symbols of ``q``."""
+    lams = root_symbols(q)
+    one = sympy.eye(m.rows)
+    out = sympy.zeros(m.rows, m.cols)
+    for j, lj in enumerate(lams):
+        e = one
+        for k, lk in enumerate(lams):
+            if k != j:
+                e = e * (m - lk * one)
+        out += f(c * lj) * WEIGHTS[lj] * e  # type: ignore[operator]
+    return out.applyfunc(sympy.expand)
+
+
 def _matrix_function(
     name: str, g: P.Gate, what: str, t: Expr | None, scale: Expr = sympy.S.One
 ) -> P.Operator | None:
-    """``f(c M)`` for a gate given by a matrix of concrete size, by the Jordan form of ``M``
-    over radicals."""
+    """``f(c M)`` for a gate given by a matrix of concrete size: the Hermite interpolation of
+    ``f(c x)`` on the eigenvalues of ``M`` in square roots, or the interpolation on the
+    eigenvalue symbols of an irreducible characteristic polynomial."""
     if g.matrix is None:
         return None
-    m = scale * sympy.Matrix(g.matrix())
-    lam = sympy.Dummy("lambda")
-    factors = sympy.factor_list(m.charpoly(lam).as_expr(lam), lam)[1]
-    worst = max(sympy.degree(p, lam) for p, _ in factors)
-    if worst > 4:
-        raise OperatorError(
-            f"cannot compute {what}: characteristic polynomial of degree {worst} "
-            "not solvable in radicals"
-        )
-    eig = m.eigenvals()
-    if any(z.has(sympy.CRootOf) for z in eig):
-        raise OperatorError(
-            f"cannot compute {what}: characteristic polynomial of degree {worst} "
-            "not solvable in radicals"
-        )
-    for z in eig:
-        _check_eigen(name, z, what, t)
-    x = sympy.Dummy("x")
+    m = sympy.Matrix(g.matrix())
     f = scalar_function(name, t)
-    _note_cut(name, list(eig), what, f)
-    out = m.analytic_func(f(x), x).applyfunc(lambda e: P.tidy(sympy.simplify(e)))  # type: ignore[operator]
+    spec = matrix_spectrum(m)
+    if spec is None:
+        raise OperatorError(
+            f"cannot compute {what}: a characteristic polynomial with a repeated factor "
+            "whose roots are not square roots over the rationals"
+        )
+    kind, data = spec
+    if kind == "roots":
+        assert isinstance(data, sympy.Poly)
+        if name in MULTIVALUED:
+            NOTES.append(f"note: {what} takes the principal branch of {name} at each eigenvalue")
+        out = root_form(f, scale, m, data)
+        names = ", ".join(f"λ_{j}" for j in range(data.degree()))
+        x = sympy.Symbol("x")
+        NOTES.append(
+            f"note: {names} are the roots of q = {sympy.sstr(data.as_expr().subs(data.gen, x))}, "
+            "w_j = 1/q'(λ_j)"
+        )
+    else:
+        assert isinstance(data, list)
+        for z, _, _ in data:
+            _check_eigen(name, scale * z, what, t)
+        _note_cut(name, [scale * z for z, _, _ in data], what, f)
+        coeffs = hermite(f, scale, [(z, idx) for z, idx, _ in data])
+        out = sympy.zeros(m.rows, m.cols)
+        power = sympy.eye(m.rows)
+        for k, ak in enumerate(coeffs):
+            if k:
+                power = (m * power).applyfunc(sympy.expand)
+            out += ak * power
+        out = out.applyfunc(lambda e: P.tidy(sympy.simplify(e)))
     entries = [[out[r, c] for c in range(out.cols)] for r in range(out.rows)]
     return _matrix_from(g, entries, what)
 

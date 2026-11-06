@@ -49,6 +49,7 @@ instance : DecidableEq Atom := fun a b => decidable_of_iff _ (Atom.beq_iff a b)
 structure LV where
   ρ : Val
   fa : ℕ → List ℤ → ℤ
+  fc : ℕ → ℤ → ℂ
 
 /-- Digit `i` of `x` in base `d`. -/
 def dig (d i : ℕ) (x : ℤ) : ℤ := x / (d : ℤ) ^ i % d
@@ -110,27 +111,38 @@ def argVs (l : List Atom) : List ℕ := l.flatMap atVs
 /-- A table's atom variables. -/
 def ids (l : List Atom) : List ℕ := l.map (·.id)
 
-/-- A term with atoms. -/
+/-- A power `ρ.atom a ^ p` of a coefficient atom by a polynomial `p` read through its own atom
+table `L`. -/
+abbrev APw := ℕ × IPoly × List Atom
+
+/-- A term with atoms and powers of coefficient atoms. -/
 structure ATm where
   c : CMon
   sums : List (ℕ × DMon)
   ats : List Atom
   dels : List Fac
   phs : List Fac
+  aps : List APw := []
   deriving Repr
 
 /-- Equality of terms, field by field. -/
 def ATm.beq (a b : ATm) : Bool :=
   decide (a.c = b.c) && decide (a.sums = b.sums) && decide (a.ats = b.ats) &&
-    decide (a.dels = b.dels) && decide (a.phs = b.phs)
+    decide (a.dels = b.dels) && decide (a.phs = b.phs) && decide (a.aps = b.aps)
 
 theorem ATm.beq_iff (a b : ATm) : a.beq b = true ↔ a = b := by
   cases a; cases b; simp [ATm.beq, and_assoc]
 
 instance : DecidableEq ATm := fun a b => decidable_of_iff _ (ATm.beq_iff a b)
 
+/-- The variables a power of a coefficient atom reads, its own atoms included. -/
+def apVs (a : APw) : List ℕ := ipVs a.2.1 ++ argVs a.2.2 ++ ids a.2.2
+
 /-- The variables a term's factors read. -/
-def fvs (t : ATm) : List ℕ := (t.dels ++ t.phs).flatMap facVars
+def fvs (t : ATm) : List ℕ := (t.dels ++ t.phs).flatMap facVars ++ t.aps.flatMap apVs
+
+theorem fvs_fac {t : ATm} {y : ℕ} (h : y ∈ (t.dels ++ t.phs).flatMap facVars) : y ∈ fvs t :=
+  List.mem_append_left _ h
 
 /-- Every variable a term's summand reads. -/
 def rvs (t : ATm) : List ℕ := fvs t ++ argVs t.ats ++ ids t.ats
@@ -141,9 +153,122 @@ def abvs (t : ATm) : List ℕ := t.sums.map (·.1)
 /-- Every variable a term names. -/
 def allV (t : ATm) : List ℕ := rvs t ++ abvs t
 
+/-- The first index of an opaque function of an index among powers. -/
+def FB : ℕ := 1000000
+
+/-- The first index of a built-in value among powers. -/
+def GB : ℕ := 2000000
+
+/-- The built-in values of a dimension `N ≥ 2`: `f = 0` is `u_N = e^(i asin(N^(-1/2))) =
+(√(N - 1) + i)/√N`, `f = 1` is `q_N = 1/(u_N + u_N⁻¹) = √N/(2 √(N - 1))`; `1` for `N < 2`. -/
+noncomputable def gfn (f N : ℕ) : ℂ :=
+  if 2 ≤ N then
+    (if f % 2 = 0 then ((Real.sqrt ((N : ℝ) - 1) : ℂ) + I) / (Real.sqrt N : ℂ)
+     else (Real.sqrt N : ℂ) / (2 * (Real.sqrt ((N : ℝ) - 1) : ℂ)))
+  else 1
+
+/-- `ρ.atom k ^ z` below `FB`; from `FB` the opaque function `(k - FB) / 2` at `z`, conjugated for
+odd `k - FB`; from `GB` the built-in value `(k - GB) / 2 % 2` of dimension `(k - GB) / 4` to the
+power `z`, conjugated for odd `k - GB`. -/
+@[irreducible] noncomputable def apF (V : LV) (k : ℕ) (z : ℤ) : ℂ :=
+  if k < FB then V.ρ.atom k ^ z
+  else if k < GB then
+    (if (k - FB) % 2 = 0 then V.fc ((k - FB) / 2) z else starRingEnd ℂ (V.fc ((k - FB) / 2) z))
+  else if (k - GB) % 2 = 0 then gfn ((k - GB) / 2 % 2) (V.ρ.dv ((k - GB) / 4)) ^ z
+  else starRingEnd ℂ (gfn ((k - GB) / 2 % 2) (V.ρ.dv ((k - GB) / 4))) ^ z
+
+/-- Whether powers of index `k` multiply by adding exponents. -/
+def apMerge (k : ℕ) : Bool := decide (k < FB) || decide (GB ≤ k)
+
+theorem gfn_ne (f N : ℕ) : gfn f N ≠ 0 := by
+  unfold gfn
+  split_ifs with h hf
+  · have hN : (0 : ℝ) < Real.sqrt N := Real.sqrt_pos.2 (by exact_mod_cast (show 0 < N by omega))
+    refine div_ne_zero ?_ (by exact_mod_cast hN.ne')
+    intro h0
+    have := congrArg Complex.im h0
+    simp at this
+  · have hN : (0 : ℝ) < Real.sqrt N := Real.sqrt_pos.2 (by exact_mod_cast (show 0 < N by omega))
+    have hM : (0 : ℝ) < Real.sqrt ((N : ℝ) - 1) := Real.sqrt_pos.2 (by
+      have : (2 : ℝ) ≤ N := by exact_mod_cast h
+      linarith)
+    exact div_ne_zero (by exact_mod_cast hN.ne') (mul_ne_zero two_ne_zero (by exact_mod_cast hM.ne'))
+  · exact one_ne_zero
+
+theorem gfn_vals (N : ℕ) (h : 2 ≤ N) :
+    let s : ℂ := Real.sqrt N
+    let m : ℂ := Real.sqrt ((N : ℝ) - 1)
+    s ≠ 0 ∧ m ≠ 0 ∧ gfn 0 N = (m + I) / s ∧ (gfn 0 N)⁻¹ = (m - I) / s ∧ gfn 1 N = s / (2 * m) := by
+  intro s m
+  have hN : (0 : ℝ) < Real.sqrt N := Real.sqrt_pos.2 (by exact_mod_cast (show 0 < N by omega))
+  have hN1 : (0 : ℝ) < (N : ℝ) - 1 := by
+    have : (2 : ℝ) ≤ N := by exact_mod_cast h
+    linarith
+  have hs : s ≠ 0 := by simp only [s]; exact_mod_cast hN.ne'
+  have hm : m ≠ 0 := by simp only [m]; exact_mod_cast (Real.sqrt_pos.2 hN1).ne'
+  have hs2 : s ^ 2 = N := by
+    simp only [s]; rw [← Complex.ofReal_pow, Real.sq_sqrt (Nat.cast_nonneg N)]; simp
+  have hm2 : m ^ 2 = N - 1 := by
+    simp only [m]; rw [← Complex.ofReal_pow, Real.sq_sqrt hN1.le]; push_cast; ring
+  have g0 : gfn 0 N = (m + I) / s := by simp [gfn, h, s, m]
+  have g1 : gfn 1 N = s / (2 * m) := by simp [gfn, h, s, m]
+  refine ⟨hs, hm, g0, ?_, g1⟩
+  rw [g0]
+  refine inv_eq_of_mul_eq_one_right ?_
+  field_simp
+  linear_combination hm2 - hs2 - I_sq
+
+theorem gfn_rel1 (N : ℕ) (h : 2 ≤ N) :
+    (Real.sqrt N : ℂ) * gfn 0 N - (Real.sqrt N : ℂ) * (gfn 0 N)⁻¹ - 2 * I = 0 := by
+  obtain ⟨hs, hm, g0, gi, g1⟩ := gfn_vals N h
+  rw [gi, g0]
+  field_simp
+  ring
+
+theorem gfn_rel2 (N : ℕ) (h : 2 ≤ N) :
+    gfn 1 N * gfn 0 N + gfn 1 N * (gfn 0 N)⁻¹ - 1 = 0 := by
+  obtain ⟨hs, hm, g0, gi, g1⟩ := gfn_vals N h
+  rw [gi, g0, g1]
+  field_simp
+  ring
+
+/-- The base of a power that multiplies by adding exponents. -/
+noncomputable def apB (V : LV) (k : ℕ) : ℂ :=
+  if k < FB then V.ρ.atom k
+  else if (k - GB) % 2 = 0 then gfn ((k - GB) / 2 % 2) (V.ρ.dv ((k - GB) / 4))
+  else starRingEnd ℂ (gfn ((k - GB) / 2 % 2) (V.ρ.dv ((k - GB) / 4)))
+
+theorem apF_B (V : LV) (k : ℕ) (hk : apMerge k = true) (z : ℤ) : apF V k z = apB V k ^ z := by
+  have hF : FB = 1000000 := rfl
+  have hG : GB = 2000000 := rfl
+  simp only [apMerge, Bool.or_eq_true, decide_eq_true_eq] at hk
+  unfold apF apB
+  by_cases h1 : k < FB
+  · rw [if_pos h1, if_pos h1]
+  · rw [if_neg h1, if_neg h1, if_neg (by omega)]
+    split_ifs <;> rfl
+
+theorem apB_ne (V : LV) (hρ : V.ρ.OK) (k : ℕ) : apB V k ≠ 0 := by
+  unfold apB
+  split_ifs
+  · exact hρ.anz k
+  · exact gfn_ne _ _
+  · exact (map_ne_zero _).2 (gfn_ne _ _)
+
+theorem apF_zero (V : LV) (k : ℕ) (hk : apMerge k = true) : apF V k 0 = 1 := by
+  rw [apF_B V k hk, zpow_zero]
+
+theorem apF_add (V : LV) (hρ : V.ρ.OK) (k : ℕ) (hk : apMerge k = true) (a b : ℤ) :
+    apF V k (a + b) = apF V k a * apF V k b := by
+  rw [apF_B V k hk, apF_B V k hk, apF_B V k hk, zpow_add₀ (apB_ne V hρ k)]
+
+/-- The value of powers of coefficient atoms and opaque functions. -/
+noncomputable def apsV (V : LV) (l : List APw) (μ : ℕ → ℤ) : ℂ :=
+  (l.map fun a => apF V a.1 (ipDen (aext V a.2.2 μ) a.2.1)).prod
+
 /-- The summand. -/
 noncomputable def abody (V : LV) (t : ATm) (μ : ℕ → ℤ) : ℂ :=
-  bodyOf V.ρ.dv t.dels t.phs (aext V t.ats μ)
+  bodyOf V.ρ.dv t.dels t.phs (aext V t.ats μ) * apsV V t.aps μ
 
 /-- The value of a term. -/
 noncomputable def ATm.den (V : LV) (ν : ℕ → ℤ) (t : ATm) : ℂ :=
@@ -190,12 +315,34 @@ theorem aext_agree (V : LV) (l : List Atom) (S : List ℕ) (hS : ∀ x ∈ argVs
       · subst e; simp [hv]
       · rw [Function.update_of_ne e, Function.update_of_ne e]; exact h x hx
 
+theorem apsV_reads (V : LV) (l : List APw) (μ μ' : ℕ → ℤ)
+    (h : ∀ x ∈ l.flatMap apVs, μ x = μ' x) : apsV V l μ = apsV V l μ' := by
+  unfold apsV
+  congr 1
+  refine List.map_congr_left fun a ha => ?_
+  have hS : ∀ x ∈ apVs a, μ x = μ' x := fun x hx => h x (List.mem_flatMap.2 ⟨a, ha, hx⟩)
+  have he := aext_agree V a.2.2 (apVs a) (fun x hx => by
+    simp only [apVs, List.mem_append] at hx ⊢; tauto) μ μ' hS
+  rw [ipDen_reads a.2.1 _ _ fun y hy => he y (by
+    simp only [apVs, List.mem_append]; exact Or.inl (Or.inl hy))]
+
+theorem apsV_upd (V : LV) (l : List APw) (x : ℕ) (h : x ∉ l.flatMap apVs) (μ : ℕ → ℤ) (j : ℤ) :
+    apsV V l (Function.update μ x j) = apsV V l μ :=
+  apsV_reads V l _ _ fun y hy => by
+    have hne : y ≠ x := fun e => h (by rw [← e]; exact hy)
+    rw [Function.update_of_ne hne]
+
+theorem apsV_append (V : LV) (a b : List APw) (μ : ℕ → ℤ) :
+    apsV V (a ++ b) μ = apsV V a μ * apsV V b μ := by
+  simp [apsV, List.map_append, List.prod_append]
+
 theorem abody_reads (V : LV) (t : ATm) : RD (rvs t) (abody V t) := by
   intro μ μ' h
   unfold abody
   have := aext_agree V t.ats (rvs t) (fun x hx => by
     simp only [rvs, List.mem_append] at hx ⊢; tauto) μ μ' h
-  exact bodyOf_reads _ _ _ _ _ fun x hx => this x (by simp only [rvs, fvs, List.mem_append]; tauto)
+  rw [bodyOf_reads _ _ _ _ _ fun x hx => this x (by simp only [rvs, fvs, List.mem_append]; tauto),
+    apsV_reads V t.aps _ _ fun x hx => h x (by simp only [rvs, fvs, List.mem_append]; tauto)]
 
 theorem den_reads (V : LV) (t : ATm) (ν ν' : ℕ → ℤ) (h : ∀ x ∈ rvs t, ν x = ν' x) :
     t.den V ν = t.den V ν' := by
@@ -245,7 +392,7 @@ def atRen (m : ℕ → ℕ) (a : Atom) : Atom :=
 /-- Every variable of a term renamed, bound ones included. -/
 def tRen (m : ℕ → ℕ) (t : ATm) : ATm :=
   ⟨t.c, t.sums.map (fun p => (m p.1, p.2)), t.ats.map (atRen m), t.dels.map (facRen m),
-    t.phs.map (facRen m)⟩
+    t.phs.map (facRen m), t.aps.map fun a => (a.1, ipRen m a.2.1, a.2.2.map (atRen m))⟩
 
 /-- `m` is injective on `S`. -/
 def injOn (m : ℕ → ℕ) (S : List ℕ) : Bool := S.all fun a => S.all fun b => m a != m b || a == b
@@ -302,8 +449,25 @@ theorem tRen_den (V : LV) (m : ℕ → ℕ) (t : ATm) (hm : injOn m (allV t) = t
       simp only [bodyOf, List.map_map]
       congr 2 <;> exact List.map_congr_left fun f _ => by
         simp [delV, phV, facRen, ipDen_ren]]
-    exact bodyOf_reads _ _ _ _ _ fun x hx => he x (by
-      simp only [allV, rvs, fvs, List.mem_append]; tauto)
+    have hap : apsV V (t.aps.map fun a => (a.1, ipRen m a.2.1, a.2.2.map (atRen m))) μ1 =
+        apsV V t.aps μ2 := by
+      simp only [apsV, List.map_map]
+      congr 1
+      refine List.map_congr_left fun a ha => ?_
+      have hin : ∀ x ∈ apVs a, x ∈ allV t := fun x hx => by
+        simp only [allV, rvs, fvs, List.mem_append, List.mem_flatMap]
+        exact Or.inl (Or.inl (Or.inl (Or.inr ⟨a, ha, hx⟩)))
+      have hU : ∀ x ∈ argVs a.2.2 ++ ids a.2.2, x ∈ allV t := fun x hx => hin x (by
+        simp only [apVs, List.mem_append] at hx ⊢; tauto)
+      have he2 := aext_ren V m a.2.2 (allV t) hm hU μ1 μ2 h
+      simp only [Function.comp_apply]
+      rw [ipDen_ren]
+      congr 1
+      exact ipDen_reads _ _ _ fun y hy => he2 y (hin y (by
+        simp only [apVs, List.mem_append]; exact Or.inl (Or.inl hy)))
+    congr 1
+    · exact bodyOf_reads _ _ _ _ _ fun x hx => he x (by
+        simp only [allV, rvs, fvs, List.mem_append]; tauto)
   have key : ∀ (s : List (ℕ × DMon)), (∀ p ∈ s, p.1 ∈ allV t) → ∀ μ1 μ2 : ℕ → ℤ,
       (∀ x ∈ allV t, μ1 (m x) = μ2 x) →
       sumsV V.ρ.dv (s.map fun p => (m p.1, p.2)) (abody V (tRen m t)) μ1 =
@@ -327,7 +491,7 @@ theorem tRen_den (V : LV) (m : ℕ → ℕ) (t : ATm) (hm : injOn m (allV t) = t
 
 /-- The product of two terms. -/
 def tMul (s t : ATm) : ATm := ⟨CMon.mul s.c t.c, s.sums ++ t.sums, s.ats ++ t.ats,
-  s.dels ++ t.dels, s.phs ++ t.phs⟩
+  s.dels ++ t.dels, s.phs ++ t.phs, s.aps ++ t.aps⟩
 
 /-- Neither term's bound or atom variables are read by the other. -/
 def tMulOK (s t : ATm) : Bool :=
@@ -372,11 +536,13 @@ theorem tMul_den (V : LV) (hρ : V.ρ.OK) (s t : ATm) (h : tMulOK s t = true) (�
         simp only [rvs, List.mem_append] at hy ⊢; tauto) _ _ (fun y hy =>
           aext_off V s.ats μ y fun hm => h1 y (Or.inr hm) hy) x
         (by simp only [rvs, fvs, List.mem_append]; tauto)
-    rw [e1, e2]
+    rw [apsV_append, e1, e2]
+    ring
   unfold ATm.den
   simp only [tMul, CMon.den_mul V.ρ hρ]
   rw [show abody V ⟨CMon.mul s.c t.c, s.sums ++ t.sums, s.ats ++ t.ats, s.dels ++ t.dels,
-    s.phs ++ t.phs⟩ = abody V (tMul s t) from rfl, sumsV_congr _ _ _ _ hb, sumsV_append]
+    s.phs ++ t.phs, s.aps ++ t.aps⟩ = abody V (tMul s t) from rfl, sumsV_congr _ _ _ _ hb,
+    sumsV_append]
   have inner : ∀ ν', sumsV V.ρ.dv t.sums (fun μ => abody V s μ * abody V t μ) ν' =
       abody V s ν' * sumsV V.ρ.dv t.sums (abody V t) ν' := fun ν' =>
     sumsV_const_mul _ _ (rvs s) _ _ (abody_reads V s)

@@ -237,9 +237,10 @@ theorem aElimVar_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
 
 /-- One elimination of a bound variable, the first that applies. -/
 def aElimStep (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
-  firstSome (fun p => if (p.1 ++ p.2.2).map (·.1) |>.contains p.2.1.1 then none else
+  firstSome (fun p => if ((p.1 ++ p.2.2).map (·.1) |>.contains p.2.1.1) ||
+      (t.aps.flatMap apVs).contains p.2.1.1 then none else
     match aElimVar PW p.2.1.1 p.2.1.2 t.ats t.dels t.phs with
-    | some e => some ⟨CMon.mul t.c e.k, p.1 ++ p.2.2, e.ats, e.ds, e.ps⟩
+    | some e => some ⟨CMon.mul t.c e.k, p.1 ++ p.2.2, e.ats, e.ds, e.ps, t.aps⟩
     | none => none) (splits t.sums)
 
 theorem aElimStep_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
@@ -255,23 +256,34 @@ theorem aElimStep_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : 
     have hok := aElimVar_ok V hρ PW hPW x D t.ats t.dels t.phs e hev
     have hs := splits_spec t.sums _ hp
     simp only at hs
+    simp only [Bool.or_eq_true, not_or, Bool.not_eq_true, List.contains_eq_mem,
+      decide_eq_false_iff_not] at hx
     unfold ATm.den
-    rw [hs, sumsV_pull _ a b x D (by simpa using hx)]
+    rw [hs, sumsV_pull _ a b x D (by simpa using hx.1)]
     show (CMon.mul t.c e.k).den V.ρ * sumsV V.ρ.dv (a ++ b)
-        (fun μ => bodyOf V.ρ.dv e.ds e.ps (aext V e.ats μ)) ν =
+        (fun μ => bodyOf V.ρ.dv e.ds e.ps (aext V e.ats μ) * apsV V t.aps μ) ν =
       t.c.den V.ρ * sumsV V.ρ.dv (a ++ b) (fun ν' => ∑ j ∈ range (D.den V.ρ.dv),
-        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j))) ν
-    rw [sumsV_congr _ _ _ (fun ν' => e.k.den V.ρ * bodyOf V.ρ.dv e.ds e.ps (aext V e.ats ν'))
-      hok, sumsV_mul_left, CMon.den_mul V.ρ hρ]
+        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j)) *
+          apsV V t.aps (Function.update ν' x j)) ν
+    have hc : ∀ ν', (∑ j ∈ range (D.den V.ρ.dv),
+        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j)) *
+          apsV V t.aps (Function.update ν' x j)) =
+        e.k.den V.ρ * (bodyOf V.ρ.dv e.ds e.ps (aext V e.ats ν') * apsV V t.aps ν') := by
+      intro ν'
+      simp only [apsV_upd V t.aps x hx.2]
+      rw [← Finset.sum_mul, hok ν']
+      ring
+    rw [sumsV_congr _ _ _ _ hc, sumsV_mul_left, CMon.den_mul V.ρ hρ]
     ring
   · simp at he
 
 
 /-- One pin of a bound variable to a new reduced atom, the first that applies. -/
 def aElimStepU (PW : List (DMon × DMon)) (t : ATm) : Option ATm :=
-  firstSome (fun p => if (p.1 ++ p.2.2).map (·.1) |>.contains p.2.1.1 then none else
+  firstSome (fun p => if ((p.1 ++ p.2.2).map (·.1) |>.contains p.2.1.1) ||
+      (t.aps.flatMap apVs).contains p.2.1.1 then none else
     match elimPinU PW p.2.1.1 p.2.1.2 t.ats t.dels t.phs with
-    | some e => some ⟨CMon.mul t.c e.k, p.1 ++ p.2.2, e.ats, e.ds, e.ps⟩
+    | some e => some ⟨CMon.mul t.c e.k, p.1 ++ p.2.2, e.ats, e.ds, e.ps, t.aps⟩
     | none => none) (splits t.sums)
 
 theorem aElimStepU_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (t t' : ATm)
@@ -288,14 +300,24 @@ theorem aElimStepU_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (t t' 
     have hok := elimPinU_ok V hρ PW x D t.ats t.dels t.phs e hev
     have hs := splits_spec t.sums _ hp
     simp only at hs
+    simp only [Bool.or_eq_true, not_or, Bool.not_eq_true, List.contains_eq_mem,
+      decide_eq_false_iff_not] at hx
     unfold ATm.den
-    rw [hs, sumsV_pull _ a b x D (by simpa using hx)]
+    rw [hs, sumsV_pull _ a b x D (by simpa using hx.1)]
     show (CMon.mul t.c e.k).den V.ρ * sumsV V.ρ.dv (a ++ b)
-        (fun μ => bodyOf V.ρ.dv e.ds e.ps (aext V e.ats μ)) ν =
+        (fun μ => bodyOf V.ρ.dv e.ds e.ps (aext V e.ats μ) * apsV V t.aps μ) ν =
       t.c.den V.ρ * sumsV V.ρ.dv (a ++ b) (fun ν' => ∑ j ∈ range (D.den V.ρ.dv),
-        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j))) ν
-    rw [sumsV_congr _ _ _ (fun ν' => e.k.den V.ρ * bodyOf V.ρ.dv e.ds e.ps (aext V e.ats ν'))
-      hok, sumsV_mul_left, CMon.den_mul V.ρ hρ]
+        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j)) *
+          apsV V t.aps (Function.update ν' x j)) ν
+    have hc : ∀ ν', (∑ j ∈ range (D.den V.ρ.dv),
+        bodyOf V.ρ.dv t.dels t.phs (aext V t.ats (Function.update ν' x j)) *
+          apsV V t.aps (Function.update ν' x j)) =
+        e.k.den V.ρ * (bodyOf V.ρ.dv e.ds e.ps (aext V e.ats ν') * apsV V t.aps ν') := by
+      intro ν'
+      simp only [apsV_upd V t.aps x hx.2]
+      rw [← Finset.sum_mul, hok ν']
+      ring
+    rw [sumsV_congr _ _ _ _ hc, sumsV_mul_left, CMon.den_mul V.ρ hρ]
     ring
   · simp at he
 
@@ -696,7 +718,7 @@ theorem aval_zeroDig (V : LV) (μ : ℕ → ℤ) (a : Atom) (h : isZeroDig a = t
 def zeroAt (t : ATm) (p : List Atom × Atom × List Atom) : Option ATm :=
   if isZeroDig p.2.1 && !(ids p.2.2).contains p.2.1.id then
     some ⟨t.c, t.sums, p.1 ++ p.2.2.map (atSub p.2.1.id []), t.dels.map (facSub p.2.1.id []),
-      t.phs.map (facSub p.2.1.id [])⟩
+      t.phs.map (facSub p.2.1.id []), t.aps⟩
   else none
 
 theorem zeroAt_ok (V : LV) (t t' : ATm) (p : List Atom × Atom × List Atom)
@@ -722,7 +744,7 @@ theorem zeroAt_ok (V : LV) (t t' : ATm) (p : List Atom × Atom × List Atom)
 def dropAt (t : ATm) (p : List Atom × Atom × List Atom) : Option ATm :=
   if !(fvs t).contains p.2.1.id && !(argVs p.2.2).contains p.2.1.id &&
       !(ids p.2.2).contains p.2.1.id then
-    some ⟨t.c, t.sums, p.1 ++ p.2.2, t.dels, t.phs⟩
+    some ⟨t.c, t.sums, p.1 ++ p.2.2, t.dels, t.phs, t.aps⟩
   else none
 
 theorem dropAt_ok (V : LV) (t t' : ATm) (p : List Atom × Atom × List Atom)
@@ -740,8 +762,9 @@ theorem dropAt_ok (V : LV) (t t' : ATm) (p : List Atom × Atom × List Atom)
   rw [hp, aext_append, aext_append]
   simp only [aext]
   rw [aext_upd V p.2.2 p.2.1.id (by simp only [List.mem_append, not_or]; exact ⟨h2, h3⟩)]
+  congr 1
   refine bodyOf_reads _ _ _ _ _ fun y hy => ?_
-  have hy' : y ≠ p.2.1.id := fun e => h1 (e ▸ (by simpa [fvs] using hy))
+  have hy' : y ≠ p.2.1.id := fun e => h1 (e ▸ (by simp only [fvs, List.mem_append]; exact Or.inl hy))
   rw [Function.update_of_ne hy']
 
 theorem find_id (l : List Atom) (hnd : (ids l).Nodup) (b : Atom) (hb : b ∈ l) :
@@ -767,7 +790,7 @@ def dedupAt (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
     if (ids t.ats).Nodup && sp.2.1.args.all (fun p => plainP t.ats p.1) &&
         !(argVs t.ats).contains sp.2.1.id then
       some ⟨t.c, t.sums, t.ats, t.dels.map (facSub sp.2.1.id (ipV a.id)),
-        t.phs.map (facSub sp.2.1.id (ipV a.id))⟩
+        t.phs.map (facSub sp.2.1.id (ipV a.id)), t.aps⟩
     else none
   | none => none
 
@@ -887,7 +910,7 @@ theorem dzDrop_ok (V : LV) (a a' : Atom) (h : dzDrop a = some a') (μ : ℕ → 
 /-- The digit condition at the split `sp` without its zero arguments. -/
 def dzDropAt (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
   match dzDrop sp.2.1 with
-  | some a' => some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+  | some a' => some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs, t.aps⟩
   | none => none
 
 theorem dzDropAt_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
@@ -997,7 +1020,8 @@ theorem aext_agreeT (V : LV) (l : List Atom) (hl : wfA l = true) (T : List ℕ)
 
 /-- The variables a term reads that it neither binds nor computes. -/
 def freeV (t : ATm) : List ℕ :=
-  (fvs t ++ argVs t.ats).filter fun v => !(ids t.ats).contains v && !(abvs t).contains v
+  (fvs t ++ argVs t.ats).filter (fun v => !(ids t.ats).contains v && !(abvs t).contains v) ++
+    (t.aps.flatMap apVs).filter fun v => !(abvs t).contains v
 
 theorem sumsV_reads_free (dv : ℕ → ℕ) (S : List ℕ) (f : (ℕ → ℤ) → ℂ) (hf : RD S f)
     (s : List (ℕ × DMon)) (ν ν' : ℕ → ℤ)
@@ -1016,22 +1040,29 @@ theorem den_reads_free (V : LV) (t : ATm) (hw : wfA t.ats = true) (ν ν' : ℕ 
     (h : ∀ v ∈ freeV t, ν v = ν' v) : t.den V ν = t.den V ν' := by
   unfold ATm.den
   congr 1
-  set T := (fvs t ++ argVs t.ats).filter fun v => !(ids t.ats).contains v
+  set T := (fvs t ++ argVs t.ats).filter (fun v => !(ids t.ats).contains v) ++ t.aps.flatMap apVs
   have hbody : RD T (abody V t) := by
     intro μ μ' hμ
     have ha := aext_agreeT V t.ats hw T (fun v hv => by
       by_cases hi : v ∈ ids t.ats
       · exact Or.inr hi
-      · exact Or.inl (List.mem_filter.2 ⟨by simp [hv], by simpa using hi⟩)) μ μ' hμ
-    refine bodyOf_reads _ _ _ _ _ fun v hv => ha v ?_
-    by_cases hi : v ∈ ids t.ats
-    · exact Or.inr hi
-    · exact Or.inl (List.mem_filter.2 ⟨List.mem_append_left _ hv, by simpa using hi⟩)
+      · exact Or.inl (List.mem_append_left _ (List.mem_filter.2 ⟨by simp [hv], by simpa using hi⟩)))
+      μ μ' hμ
+    unfold abody
+    congr 1
+    · refine bodyOf_reads _ _ _ _ _ fun v hv => ha v ?_
+      by_cases hi : v ∈ ids t.ats
+      · exact Or.inr hi
+      · exact Or.inl (List.mem_append_left _ (List.mem_filter.2
+          ⟨List.mem_append_left _ (List.mem_append_left _ hv), by simpa using hi⟩))
+    · exact apsV_reads V t.aps μ μ' fun v hv => hμ v (List.mem_append_right _ hv)
   refine sumsV_reads_free _ T _ hbody _ _ _ fun v hv hb => h v ?_
-  simp only [T, List.mem_filter] at hv
-  refine List.mem_filter.2 ⟨hv.1, ?_⟩
-  simp only [Bool.and_eq_true, Bool.not_eq_true'] at hv ⊢
-  exact ⟨hv.2, by simpa [abvs] using hb⟩
+  have hb' : (abvs t).contains v = false := by simpa [abvs] using hb
+  simp only [T, List.mem_append, List.mem_filter] at hv
+  simp only [freeV, List.mem_append, List.mem_filter, Bool.and_eq_true, Bool.not_eq_true']
+  rcases hv with hv | hv
+  · exact Or.inl ⟨hv.1, by simpa using hv.2, hb'⟩
+  · exact Or.inr ⟨hv, hb'⟩
 
 /-! ## Canonical names -/
 
@@ -1047,20 +1078,31 @@ def canonRen (t : ATm) : ATm :=
   let occ := uniq (fvs t ++ ids t.ats ++ argVs t.ats ++ abvs t)
   let bl := occ.filter fun v => (abvs t).contains v
   let al := occ.filter fun v => (ids t.ats).contains v && !(abvs t).contains v
-  if injOn (cmap bl al) (allV t) && wfA t.ats then tRen (cmap bl al) t else t
+  if injOn (cmap bl al) (allV t) && wfA t.ats &&
+      (t.aps.flatMap apVs).all (fun v => !(ids t.ats).contains v) then tRen (cmap bl al) t
+  else t
 
 theorem canonRen_ok (V : LV) (t : ATm) (ν : ℕ → ℤ) : (canonRen t).den V ν = t.den V ν := by
   unfold canonRen
   simp only
   split_ifs with hc
   · simp only [Bool.and_eq_true] at hc
-    rw [tRen_den V _ t hc.1]
-    refine den_reads_free V t hc.2 _ _ fun v hv => ?_
-    simp only [freeV, List.mem_filter, Bool.and_eq_true, Bool.not_eq_true',
-      List.contains_eq_mem, decide_eq_false_iff_not] at hv
+    obtain ⟨⟨hinj, hw⟩, hap0⟩ := hc
+    have hap : ∀ v ∈ t.aps.flatMap apVs, v ∉ ids t.ats := by
+      intro v hv hi
+      have := List.all_eq_true.1 hap0 v hv
+      simp [hi] at this
+    rw [tRen_den V _ t hinj]
+    refine den_reads_free V t hw _ _ fun v hv => ?_
+    have key : v ∉ abvs t ∧ v ∉ ids t.ats := by
+      simp only [freeV, List.mem_append, List.mem_filter, Bool.and_eq_true, Bool.not_eq_true',
+        List.contains_eq_mem, decide_eq_false_iff_not] at hv
+      rcases hv with hv | hv
+      · exact ⟨hv.2.2, hv.2.1⟩
+      · exact ⟨hv.2, hap v hv.1⟩
     simp only [Function.comp_apply, cmap, List.contains_eq_mem, List.mem_filter,
       decide_eq_true_eq, Bool.and_eq_true, Bool.not_eq_true', decide_eq_false_iff_not]
-    rw [if_neg (fun h' => hv.2.2 h'.2), if_neg (fun h' => hv.2.1 h'.2.1)]
+    rw [if_neg (fun h' => key.1 h'.2), if_neg (fun h' => key.2 h'.2.1)]
   · rfl
 
 /-! ## Sorting the sums -/
@@ -1121,13 +1163,13 @@ theorem sumsV_sSort (dv : ℕ → ℕ) (l : List (ℕ × DMon)) (hl : (l.map (·
 
 /-- The sums sorted, when their variables are distinct. -/
 def sortSums (t : ATm) : ATm :=
-  if (abvs t).Nodup then ⟨t.c, sSort t.sums, t.ats, t.dels, t.phs⟩ else t
+  if (abvs t).Nodup then ⟨t.c, sSort t.sums, t.ats, t.dels, t.phs, t.aps⟩ else t
 
 theorem sortSums_ok (V : LV) (t : ATm) (ν : ℕ → ℤ) : (sortSums t).den V ν = t.den V ν := by
   unfold sortSums
   split_ifs with h
   · unfold ATm.den; simp only
-    rw [show abody V ⟨t.c, sSort t.sums, t.ats, t.dels, t.phs⟩ = abody V t from rfl,
+    rw [show abody V ⟨t.c, sSort t.sums, t.ats, t.dels, t.phs, t.aps⟩ = abody V t from rfl,
       sumsV_sSort _ _ h]
   · rfl
 
@@ -1141,9 +1183,9 @@ def xPin1 (t : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D : DMon) (pre : List 
     Option ATm :=
   if decide (f.1 = D) && decide (D' = D) && decide (f.2 = ipSub (ipV x) (ipV y)) &&
       decide (x ≠ y) && !((a ++ b).map (·.1)).contains x && !((a' ++ b').map (·.1)).contains y &&
-      !(ids t.ats).contains x && !(ids t.ats).contains y then
+      !(ids t.ats).contains x && !(ids t.ats).contains y && !(t.aps.flatMap apVs).contains x then
     some ⟨t.c, a ++ b, t.ats.map (atSub x (ipV y)), (pre ++ post).map (facSub x (ipV y)),
-      t.phs.map (facSub x (ipV y))⟩
+      t.phs.map (facSub x (ipV y)), t.aps⟩
   else none
 
 /-- The first exact pin of a term. -/
@@ -1169,7 +1211,7 @@ theorem xPin1_ok (V : LV) (t t' : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D :
   subst h
   simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', List.contains_eq_mem,
     decide_eq_false_iff_not] at hc
-  obtain ⟨⟨⟨⟨⟨⟨⟨hf1, hD'⟩, hf2⟩, hxy⟩, hx⟩, hy'⟩, hxa⟩, hya⟩ := hc
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨hf1, hD'⟩, hf2⟩, hxy⟩, hx⟩, hy'⟩, hxa⟩, hya⟩, hxap⟩ := hc
   subst hD'
   unfold ATm.den
   congr 1
@@ -1180,8 +1222,9 @@ theorem xPin1_ok (V : LV) (t t' : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D :
   set ν' := Function.update μ y (k : ℤ) with hν'
   have hyv : ν' y = k := by simp [ν']
   have hR : ∀ S : List (ℕ × DMon), abody V ⟨t.c, S, t.ats.map (atSub x (ipV y)),
-      (pre ++ post).map (facSub x (ipV y)), t.phs.map (facSub x (ipV y))⟩ ν' =
-      bodyOf V.ρ.dv (pre ++ post) t.phs (aext V t.ats (Function.update ν' x k)) := by
+      (pre ++ post).map (facSub x (ipV y)), t.phs.map (facSub x (ipV y)), t.aps⟩ ν' =
+      bodyOf V.ρ.dv (pre ++ post) t.phs (aext V t.ats (Function.update ν' x k)) *
+        apsV V t.aps ν' := by
     intro S
     unfold abody
     simp only
@@ -1197,9 +1240,10 @@ theorem xPin1_ok (V : LV) (t t' : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D :
   rw [hR]
   have hsplit : ∀ j : ℕ, j < D'.den V.ρ.dv → abody V t (Function.update ν' x (j : ℤ)) =
       (if j = k then bodyOf V.ρ.dv (pre ++ post) t.phs
-        (aext V t.ats (Function.update ν' x (j : ℤ))) else 0) := by
+        (aext V t.ats (Function.update ν' x (j : ℤ))) else 0) * apsV V t.aps ν' := by
     intro j hj
     unfold abody
+    rw [apsV_upd V t.aps x hxap]
     rw [hd]
     have hdel : delV V.ρ.dv (aext V t.ats (Function.update ν' x (j : ℤ))) f =
         if j = k then 1 else 0 := by
@@ -1212,7 +1256,7 @@ theorem xPin1_ok (V : LV) (t t' : ATm) (a b : List (ℕ × DMon)) (x : ℕ) (D :
         exact fun hdv => hjk (dvd_range_eq _ j k hj hk hdv)
     simp only [bodyOf, List.map_append, List.map_cons, List.prod_append, List.prod_cons, hdel]
     split_ifs <;> ring
-  rw [Finset.sum_congr rfl fun j hj => hsplit j (Finset.mem_range.1 hj),
+  rw [Finset.sum_congr rfl fun j hj => hsplit j (Finset.mem_range.1 hj), ← Finset.sum_mul,
     Finset.sum_ite_eq' (range (D'.den V.ρ.dv)) k, if_pos (Finset.mem_range.2 hk)]
 
 theorem xPin_ok (V : LV) (t t' : ATm) (h : xPin t = some t') (ν : ℕ → ℤ) :
@@ -1225,6 +1269,103 @@ theorem xPin_ok (V : LV) (t t' : ATm) (h : xPin t = some t') (ν : ℕ → ℤ) 
 
 /-! ## The normaliser -/
 
+/-! ## Pins into powers of coefficient atoms -/
+
+/-- `x` substituted by `v` in the arguments of a power's atoms. -/
+def apSubA (x : ℕ) (v : IPoly) (a : APw) : APw := (a.1, a.2.1, a.2.2.map (atSub x v))
+
+/-- Every power reads `x` only through atom arguments reduced modulo a divisor of `M`, and neither
+`x` nor `v` names one of its atoms. -/
+def apsPer (x : ℕ) (M : DMon) (v : IPoly) (l : List APw) : Bool :=
+  l.all fun a => !ipHas x a.2.1 && argsPer x M a.2.2 && !(ids a.2.2).contains x && plainP a.2.2 v
+
+theorem apsV_pin (V : LV) (hρ : V.ρ.OK) (x : ℕ) (M : DMon) (v : IPoly) (l : List APw)
+    (h : apsPer x M v l = true) (hvx : ipHas x v = false) (μ : ℕ → ℤ)
+    (hd : ((M.den V.ρ.dv : ℕ) : ℤ) ∣ μ x - ipDen μ v) :
+    apsV V (l.map (apSubA x v)) μ = apsV V l μ := by
+  unfold apsV
+  rw [List.map_map]
+  congr 1
+  refine List.map_congr_left fun a ha => ?_
+  simp only [apsPer, List.all_eq_true, Bool.and_eq_true, Bool.not_eq_true',
+    List.contains_eq_mem, decide_eq_false_iff_not] at h
+  obtain ⟨⟨⟨hp, hper⟩, hxid⟩, hvp⟩ := h a ha
+  simp only [Function.comp_apply, apSubA]
+  congr 1
+  have e1 := aext_sub V a.2.2 x hxid v hvp hvx μ
+  have e2 := aext_congr V hρ x M a.2.2 hper hxid μ (μ x) (ipDen μ v) hd
+  rw [Function.update_eq_self] at e2
+  have hl : ipDen (aext V (a.2.2.map (atSub x v)) μ) a.2.1 =
+      ipDen (aext V a.2.2 (Function.update μ x (ipDen μ v))) a.2.1 := by
+    rw [e1, ipDen_upd_of _ _ _ _ hp]
+  have hr : ipDen (aext V a.2.2 μ) a.2.1 =
+      ipDen (aext V a.2.2 (Function.update μ x (ipDen μ v))) a.2.1 := by
+    rw [e2, ipDen_upd_of _ _ _ _ hp]
+  rw [hl, hr]
+
+/-- The powers read `x` as `v` for the delta `f = [M ∣ s x + b]` of `t`, `s = ±1`. -/
+def apsPin1 (t : ATm) (x : ℕ) (pre : List Fac) (f : Fac) (post : List Fac) : Option ATm :=
+  match ipLin x f.2 with
+  | some (a, b) =>
+    match ipConst a with
+    | some s =>
+      if (s == 1 || s == -1) && plainP t.ats f.2 && apsPer x f.1 (pinVal s b) t.aps &&
+          (t.aps.flatMap apVs).contains x then
+        some ⟨t.c, t.sums, t.ats, pre ++ f :: post, t.phs, t.aps.map (apSubA x (pinVal s b))⟩
+      else none
+    | none => none
+  | none => none
+
+theorem prod_zero_of_mem {l : List ℂ} (h : (0 : ℂ) ∈ l) : l.prod = 0 := List.prod_eq_zero h
+
+theorem apsPin1_ok (V : LV) (hρ : V.ρ.OK) (t t' : ATm) (x : ℕ) (pre : List Fac) (f : Fac)
+    (post : List Fac) (ht : t.dels = pre ++ f :: post) (h : apsPin1 t x pre f post = some t')
+    (ν : ℕ → ℤ) : t'.den V ν = t.den V ν := by
+  unfold apsPin1 at h
+  split at h
+  · next a b hlin =>
+    split at h
+    · next s hs =>
+      split_ifs at h with hc
+      simp only [Option.some.injEq] at h
+      subst h
+      simp only [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at hc
+      obtain ⟨⟨⟨hs1, hfp⟩, hper⟩, _⟩ := hc
+      obtain ⟨ha, hb, hp⟩ := ipLin_spec x f.2 a b hlin
+      have hsv : ∀ ν, ipDen ν a = s := fun ν => ipConst_spec a s hs ν
+      have hvx : ipHas x (pinVal s b) = false := ipHas_smul _ _ _ hb
+      unfold ATm.den
+      congr 1
+      refine sumsV_congr _ _ _ _ (fun μ => ?_) ν
+      unfold abody
+      simp only
+      rw [← ht]
+      by_cases hd : ((f.1.den V.ρ.dv : ℕ) : ℤ) ∣ ipDen μ f.2
+      · rw [apsV_pin V hρ x f.1 (pinVal s b) t.aps hper hvx μ (by
+          rw [hp, hsv] at hd
+          have := (pin_dvd s hs1 _ (μ x) (ipDen μ b)).1 hd
+          simpa [pinVal, ipDen_smul] using this)]
+      · have h0 : bodyOf V.ρ.dv t.dels t.phs (aext V t.ats μ) = 0 := by
+          unfold bodyOf
+          rw [ht]
+          have : delV V.ρ.dv (aext V t.ats μ) f = 0 := by
+            unfold delV; rw [ipDen_aext V t.ats f.2 hfp, if_neg hd]
+          rw [prod_zero_of_mem (List.mem_map.2 ⟨f, by simp, this⟩), zero_mul]
+        rw [h0, zero_mul, zero_mul]
+    · simp at h
+  · simp at h
+
+/-- The first pin of a variable the powers read, by a delta of the term. -/
+def apsPin (t : ATm) : Option ATm :=
+  firstSome (fun x => firstSome (fun p => apsPin1 t x p.1 p.2.1 p.2.2) (splits t.dels))
+    (abvs t)
+
+theorem apsPin_ok (V : LV) (hρ : V.ρ.OK) (t t' : ATm) (h : apsPin t = some t') (ν : ℕ → ℤ) :
+    t'.den V ν = t.den V ν := by
+  obtain ⟨x, _, hx⟩ := firstSome_spec _ _ _ h
+  obtain ⟨p, hp, he⟩ := firstSome_spec _ _ _ hx
+  exact apsPin1_ok V hρ t t' x p.1 p.2.1 p.2.2 (splits_spec _ _ hp) he ν
+
 /-- Eliminations repeated, at most `n` of them, the atom rules applied before each. -/
 @[irreducible] def aElimAll (PW : List (DMon × DMon)) : ℕ → ATm → ATm
   | 0, t => t
@@ -1234,7 +1375,9 @@ theorem xPin_ok (V : LV) (t t' : ATm) (h : xPin t = some t') (ν : ℕ → ℤ) 
       | some t' => aElimAll PW n t'
       | none => match aElimStepU PW (aRules (t.ats.length + 1) t) with
         | some t' => aElimAll PW n t'
-        | none => t
+        | none => match apsPin (aRules (t.ats.length + 1) t) with
+          | some t' => aElimAll PW n t'
+          | none => t
 
 theorem aElimAll_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ)
     (n : ℕ) (t : ATm) (ν : ℕ → ℤ) : (aElimAll PW n t).den V ν = t.den V ν := by
@@ -1251,11 +1394,14 @@ theorem aElimAll_ok (V : LV) (hρ : V.ρ.OK) (PW : List (DMon × DMon)) (hPW : P
       · split
         · next t' h =>
           rw [ih, aElimStepU_ok V hρ PW _ t' h, (aRules_ok V (t.ats.length + 1) t).den]
-        · rfl
+        · split
+          · next t' h =>
+            rw [ih, apsPin_ok V hρ _ t' h, (aRules_ok V (t.ats.length + 1) t).den]
+          · rfl
 
 /-- Deltas reading digit conditions rewritten, when the table's variables are distinct. -/
 def dzStep (PW : List (DMon × DMon)) (t : ATm) : ATm :=
-  if (ids t.ats).Nodup then ⟨t.c, t.sums, t.ats, dzRule PW t.ats t.dels, t.phs⟩ else t
+  if (ids t.ats).Nodup then ⟨t.c, t.sums, t.ats, dzRule PW t.ats t.dels, t.phs, t.aps⟩ else t
 
 theorem dzStep_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t : ATm) :
     PWEq V t (dzStep PW t) := by
@@ -1316,7 +1462,7 @@ def modDropAt (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm)
     if (ipVs q).all (fun y => y != sp.2.1.id && !(ids sp.2.2).contains y) &&
         !(argVs t.ats).contains sp.2.1.id && !(ids sp.2.2).contains sp.2.1.id &&
         (t.dels ++ t.phs).all (fun g => !facHas sp.2.1.id g || (g.1.c != 0 && dvdP fl PW g.1 M)) then
-      some ⟨t.c, t.sums, t.ats, t.dels.map (facSub sp.2.1.id q), t.phs.map (facSub sp.2.1.id q)⟩
+      some ⟨t.c, t.sums, t.ats, t.dels.map (facSub sp.2.1.id q), t.phs.map (facSub sp.2.1.id q), t.aps⟩
     else none
   | _, _ => none
 
@@ -1369,6 +1515,7 @@ theorem modDropAt_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl 
         refine (Int.natCast_dvd_natCast.2 hK).trans ?_
         rw [Int.emod_def]; exact ⟨ipDen P q / ((M.den V.ρ.dv : ℕ) : ℤ), by ring⟩
     simp only [bodyOf]
+    congr 1
     congr 1
     · congr 1; exact List.map_congr_left fun g hg => (hcong g (List.mem_append_left _ hg)).1
     · congr 1; exact List.map_congr_left fun g hg => (hcong g (List.mem_append_right _ hg)).2
@@ -1431,7 +1578,7 @@ def repDel1 (fl : List ℕ) (PW : List (DMon × DMon)) (t : ATm) (pre : List Fac
         decide (f.2 = ipSub (ipMul (ipV u.id) (ipV r.id)) (ipMul (ipV v.id) (ipV r.id))) &&
         PW.contains (d, N) && dvdP fl PW d N && decide ((ids t.ats).Nodup) &&
         t.ats.contains r && t.ats.contains u && t.ats.contains v then
-      some ⟨t.c, t.sums, t.ats, pre ++ (d, ipSub (ipV u.id) (ipV v.id)) :: post, t.phs⟩
+      some ⟨t.c, t.sums, t.ats, pre ++ (d, ipSub (ipV u.id) (ipV v.id)) :: post, t.phs, t.aps⟩
     else none
   | _, _, _ => none
 
@@ -1487,8 +1634,9 @@ theorem repDel1_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.
       rw [hf2, hfN, ipDen_sub, ipDen_mul, ipDen_mul, ipDen_V, ipDen_V, ipDen_V, ipDen_sub, ipDen_V,
         ipDen_V, hR, hm]
       exact if_congr key rfl rfl
-    show bodyOf V.ρ.dv (pre ++ (d, ipSub (ipV u.id) (ipV v.id)) :: post) t.phs E =
-      bodyOf V.ρ.dv t.dels t.phs E
+    show bodyOf V.ρ.dv (pre ++ (d, ipSub (ipV u.id) (ipV v.id)) :: post) t.phs E *
+        apsV V t.aps μ = bodyOf V.ρ.dv t.dels t.phs E * apsV V t.aps μ
+    congr 1
     rw [hd]
     simp only [bodyOf, List.map_append, List.map_cons, List.prod_append, List.prod_cons, hdel]
   · simp at h
@@ -1532,7 +1680,7 @@ theorem modRules_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V
 theorem swap_pw (V : LV) (t : ATm) (sp : List Atom × Atom × List Atom)
     (hsp : t.ats = sp.1 ++ sp.2.1 :: sp.2.2) (a' : Atom) (hid : a'.id = sp.2.1.id)
     (hv : ∀ μ, aval V (aext V sp.1 μ) a' = aval V (aext V sp.1 μ) sp.2.1) :
-    PWEq V t ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩ := by
+    PWEq V t ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs, t.aps⟩ := by
   refine ⟨rfl, rfl, fun μ => ?_⟩
   unfold abody
   simp only
@@ -1590,7 +1738,7 @@ def cstAt (t : ATm) (p : List Atom × Atom × List Atom) : Option ATm :=
   | some c =>
     if (ids p.2.2).contains p.2.1.id then none else
       some ⟨t.c, t.sums, p.1 ++ p.2.2.map (atSub p.2.1.id (ipC c)),
-        t.dels.map (facSub p.2.1.id (ipC c)), t.phs.map (facSub p.2.1.id (ipC c))⟩
+        t.dels.map (facSub p.2.1.id (ipC c)), t.phs.map (facSub p.2.1.id (ipC c)), t.aps⟩
   | none => none
 
 theorem ipC_plain (l : List Atom) (c : ℤ) : plainP l (ipC c) = true := by
@@ -1939,12 +2087,12 @@ theorem xorP_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (pre :
 def xorAt (PW : List (DMon × DMon)) (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
   match xorX PW sp.1 sp.2.1 with
   | some o' =>
-    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ o' :: sp.2.2, t.dels, t.phs⟩
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ o' :: sp.2.2, t.dels, t.phs, t.aps⟩
     else none
   | none =>
     match xorP PW sp.1 sp.2.1 with
     | some o' =>
-      if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ o' :: sp.2.2, t.dels, t.phs⟩
+      if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ o' :: sp.2.2, t.dels, t.phs, t.aps⟩
       else none
     | none => none
 
@@ -1983,7 +2131,7 @@ theorem xorAt_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t t'
 /-- An in-place atom rule at the split `sp`. -/
 def swapAt (g : Atom → Option Atom) (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
   match g sp.2.1 with
-  | some a' => some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+  | some a' => some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs, t.aps⟩
   | none => none
 
 /-- An atom read by later atoms, read as an earlier atom computing the same value. -/
@@ -1993,7 +2141,7 @@ def dedupA (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
     if (ids t.ats).Nodup && sp.2.1.args.all (fun p => plainP t.ats p.1) &&
         (argVs sp.2.2).contains sp.2.1.id then
       some ⟨t.c, t.sums, sp.1 ++ sp.2.2.map (atSub sp.2.1.id (ipV a.id)),
-        t.dels.map (facSub sp.2.1.id (ipV a.id)), t.phs.map (facSub sp.2.1.id (ipV a.id))⟩
+        t.dels.map (facSub sp.2.1.id (ipV a.id)), t.phs.map (facSub sp.2.1.id (ipV a.id)), t.aps⟩
     else none
   | none => none
 
@@ -2062,7 +2210,7 @@ def dedupW (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
   | some a =>
     if wfA t.ats && (ids t.ats).Nodup && (fvs t).contains sp.2.1.id then
       some ⟨t.c, t.sums, t.ats, t.dels.map (facSub sp.2.1.id (ipV a.id)),
-        t.phs.map (facSub sp.2.1.id (ipV a.id))⟩
+        t.phs.map (facSub sp.2.1.id (ipV a.id)), t.aps⟩
     else none
   | none => none
 
@@ -2105,7 +2253,7 @@ def dsubAt (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
             if (s == 1 || s == -1) && f.1.c != 0 && !(ids t.ats).contains o &&
                 (ipVs B).all (fun y => !(ids (sp.2.1 :: sp.2.2)).contains y) &&
                 sp.2.1.args.all (fun p => !ipHas o p.1 || p.2.dvd f.1) then
-              some ⟨t.c, t.sums, sp.1 ++ atSub o (pinVal s B) sp.2.1 :: sp.2.2, t.dels, t.phs⟩
+              some ⟨t.c, t.sums, sp.1 ++ atSub o (pinVal s B) sp.2.1 :: sp.2.2, t.dels, t.phs, t.aps⟩
             else none
           | none => none
         | none => none) t.dels) (atVs sp.2.1) with
@@ -2359,7 +2507,7 @@ def dotXorAt (PW : List (DMon × DMon)) (t : ATm) (sp : List Atom × Atom × Lis
         (fvs t).contains sp.2.1.id then
       some ⟨t.c, t.sums, sp.1 ++ b1 :: b2 :: sp.2.1 :: sp.2.2,
         t.dels.map (facSub sp.2.1.id (ipAdd (ipV (maxV t + 1)) (ipV (maxV t + 2)))),
-        t.phs.map (facSub sp.2.1.id (ipAdd (ipV (maxV t + 1)) (ipV (maxV t + 2))))⟩
+        t.phs.map (facSub sp.2.1.id (ipAdd (ipV (maxV t + 1)) (ipV (maxV t + 2)))), t.aps⟩
     else none
   | none => none
 
@@ -2450,13 +2598,14 @@ theorem dotXorAt_ok (V : LV) (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (t
         exact this.1 h'), Function.update_self]
     rw [bodyOf_sub, ipDen_add, ipDen_V, ipDen_V, hFB, show maxV t + 2 = B + 1 by rfl, hFB1]
     have hfv : ∀ g ∈ t.dels ++ t.phs, ∀ y ∈ facVars g, y < B := fun g hg y hy =>
-      hall y (Or.inl (List.mem_flatMap.2 ⟨g, hg, hy⟩))
+      hall y (Or.inl (fvs_fac (List.mem_flatMap.2 ⟨g, hg, hy⟩)))
     have hgF : ∀ g ∈ t.dels ++ t.phs, ipDen F' g.2 = ipDen F g.2 := fun g hg =>
       ipDen_reads _ _ _ fun y hy => hFF y (by
-        simp only [allV, rvs, fvs, List.mem_append]; left; left; left
-        exact List.mem_flatMap.2 ⟨g, hg, hy⟩)
+        simp only [allV, rvs, List.mem_append]; left; left; left
+        exact fvs_fac (List.mem_flatMap.2 ⟨g, hg, hy⟩))
     have hs2 : (2 : ℤ) ∣ (aval V E0 b1 + aval V E0 b2) - F' sp.2.1.id := by
       rw [hFa, ← neg_sub]; exact dvd_neg.2 hdv
+    congr 1
     unfold bodyOf
     congr 1
     · congr 1; refine List.map_congr_left fun g hg => ?_
@@ -2645,7 +2794,7 @@ theorem m1Arg_ok (V : LV) (pre : List Atom) (hw : wfA pre = true) (hn : (ids pre
 def m1At (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
   match m1Arg sp.1 sp.2.1 with
   | some a' =>
-    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs, t.aps⟩
     else none
   | none => none
 
@@ -2673,7 +2822,7 @@ def aliasAt (fl : List ℕ) (t : ATm) (sp : List Atom × Atom × List Atom) : Op
   | 2, [([([z], 1)], N)] =>
     if isM1 sp.1 z N && decide (2 ≤ N.den (flv fl)) && wfA t.ats && (ids t.ats).Nodup then
       some ⟨t.c, t.sums, sp.1 ++ sp.2.2.map (atSub sp.2.1.id (ipV z)),
-        t.dels.map (facSub sp.2.1.id (ipV z)), t.phs.map (facSub sp.2.1.id (ipV z))⟩
+        t.dels.map (facSub sp.2.1.id (ipV z)), t.phs.map (facSub sp.2.1.id (ipV z)), t.aps⟩
     else none
   | _, _ => none
 
@@ -2807,7 +2956,7 @@ theorem falseDel_ok (V : LV) (fl : List ℕ) (hfl : FloorOK fl V.ρ) (ats : List
 def falseAt (fl : List ℕ) (t : ATm) (sp : List Fac × Fac × List Fac) : Option ATm :=
   match falseDel fl t.ats sp.2.1 with
   | some f' =>
-    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, t.ats, sp.1 ++ f' :: sp.2.2, t.phs⟩
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, t.ats, sp.1 ++ f' :: sp.2.2, t.phs, t.aps⟩
     else none
   | none => none
 
@@ -2899,7 +3048,7 @@ theorem redArg_spec (ds : List Fac) (pre : List Atom) (a : Atom) (u : ℕ) (a' :
 def redAt (t : ATm) (sp : List Atom × Atom × List Atom) : Option ATm :=
   match redArg t.dels sp.1 sp.2.1 with
   | some (_, a') =>
-    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs⟩
+    if wfA t.ats && (ids t.ats).Nodup then some ⟨t.c, t.sums, sp.1 ++ a' :: sp.2.2, t.dels, t.phs, t.aps⟩
     else none
   | none => none
 
@@ -2963,7 +3112,8 @@ theorem redAt_ok (V : LV) (t t' : ATm) (sp : List Atom × Atom × List Atom)
         rw [if_neg]
         simpa [ipDen, imDen, hFu] using hd
       unfold bodyOf
-      rw [hz _ hF, hz _ hF', zero_mul, zero_mul]
+      rw [hz _ hF, hz _ hF']
+      simp
   · simp at h
 
 /-- `(u, w)` when `f = [D ∣ s a + c b]` equates the reduced atoms `a`, `b` modulo a constant `D`,
@@ -3037,7 +3187,7 @@ def eqAt (t : ATm) (sp : List Fac × Fac × List Fac) : Option ATm :=
     if wfA t.ats && (ids t.ats).Nodup &&
         ((sp.1 ++ sp.2.2).any (facHas w) || t.phs.any (facHas w)) then
       some ⟨t.c, t.sums, t.ats, sp.1.map (facSub w (ipV u)) ++ sp.2.1 ::
-        sp.2.2.map (facSub w (ipV u)), t.phs.map (facSub w (ipV u))⟩
+        sp.2.2.map (facSub w (ipV u)), t.phs.map (facSub w (ipV u)), t.aps⟩
     else none
   | none => none
 
@@ -3239,7 +3389,7 @@ sorted sums; `none` when the term vanishes. -/
 def canonCore (fl : List ℕ) (t : ATm) : Option ATm :=
   match canonF fl t.dels t.phs with
   | none => none
-  | some (k, ds, ps) => some (sortSums (sortTab (canonRen ⟨CMon.mul t.c k, t.sums, t.ats, ds, ps⟩)))
+  | some (k, ds, ps) => some (sortSums (sortTab (canonRen ⟨CMon.mul t.c k, t.sums, t.ats, ds, ps, t.aps⟩)))
 
 /-- Atom rules, digit conditions read as deltas, factor canonicalisation, canonical names and
 sorted sums; `none` when the term vanishes. -/
@@ -3256,14 +3406,16 @@ theorem canonA_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.�
   · next hn =>
     intro ν
     rw [← h13.den ν]
-    exact den_zero_of_pw V t3 (fun μ => canonF_none V.ρ hρ fl hfl _ _ hn _) ν
+    exact den_zero_of_pw V t3 (fun μ => by
+      unfold abody; rw [canonF_none V.ρ hρ fl hfl _ _ hn _, zero_mul]) ν
   · next k ds ps hk =>
     intro ν
     rw [sortSums_ok, sortTab_ok, canonRen_ok, ← h13.den ν]
-    refine den_of_pw V t3 ⟨CMon.mul t3.c k, t3.sums, t3.ats, ds, ps⟩ rfl (fun μ => ?_) ν
+    refine den_of_pw V t3 ⟨CMon.mul t3.c k, t3.sums, t3.ats, ds, ps, t3.aps⟩ rfl (fun μ => ?_) ν
     unfold abody
     simp only
-    rw [CMon.den_mul V.ρ hρ, mul_assoc, canonF_some V.ρ hρ fl hfl _ _ k ds ps hk]
+    rw [CMon.den_mul V.ρ hρ, ← canonF_some V.ρ hρ fl hfl _ _ k ds ps hk]
+    ring
 
 /-- Eliminations and canonicalisation, alternated `r` times. -/
 def normA (fl : List ℕ) (PW : List (DMon × DMon)) : ℕ → ATm → Option ATm
@@ -3318,10 +3470,10 @@ theorem aden_self (V : LV) (ν : ℕ → ℤ) (t : ATm) :
   rw [← aden_withQ]; rfl
 
 theorem awithQ_shape (t u : ATm) (h : ashape u = ashape t) (q : ℚ) : awithQ u q = awithQ t q := by
-  obtain ⟨⟨_, r, sq, rc, am, gc⟩, s, at', d, p⟩ := u
-  obtain ⟨⟨_, r', sq', rc', am', gc'⟩, s', at'', d', p'⟩ := t
+  obtain ⟨⟨_, r, sq, rc, am, gc⟩, s, at', d, p, ap⟩ := u
+  obtain ⟨⟨_, r', sq', rc', am', gc'⟩, s', at'', d', p', ap'⟩ := t
   simp only [ashape, ATm.mk.injEq, CMon.mk.injEq] at h
-  obtain ⟨⟨-, rfl, rfl, rfl, rfl, rfl⟩, rfl, rfl, rfl, rfl⟩ := h
+  obtain ⟨⟨-, rfl, rfl, rfl, rfl, rfl⟩, rfl, rfl, rfl, rfl, rfl⟩ := h
   rfl
 
 theorem taAdd_ok (V : LV) (ν : ℕ → ℤ) (t : ATm) (l : List ATm) :

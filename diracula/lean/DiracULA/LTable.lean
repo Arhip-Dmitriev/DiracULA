@@ -161,7 +161,7 @@ def sortTab (t : ATm) : ATm :=
   match topo (t.ats.length + 1) [] t.ats with
   | some l =>
     if wfA t.ats && (ids t.ats).Nodup && wfA l && l.isPerm t.ats then
-      ⟨t.c, t.sums, l, t.dels, t.phs⟩
+      ⟨t.c, t.sums, l, t.dels, t.phs, t.aps⟩
     else t
   | none => t
 

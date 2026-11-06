@@ -26,7 +26,7 @@ import dataclasses
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 import sympy  # type: ignore[import-untyped]  # sympy ships no py.typed marker
 
@@ -1803,22 +1803,24 @@ def _plain_radical(r: Expr) -> bool:
     return True
 
 
-def root_symbols(q: sympy.Poly) -> list[sympy.Symbol]:
-    """The eigenvalue symbols of the roots of ``q``, with their weights."""
+def root_symbols(q: sympy.Poly, start: int = 0) -> list[sympy.Symbol]:
+    """The eigenvalue symbols of the roots of ``q``, numbered from ``start``, with their
+    weights."""
     out = []
-    for j in range(q.degree()):
+    for j in range(start, start + q.degree()):
         lam = sympy.Symbol(f"λ_{j}", complex=True)
         w = sympy.Symbol(f"w_{j}", complex=True)
-        ROOTS[lam] = (q, j)
+        ROOTS[lam] = (q, j - start)
         WEIGHTS[lam] = w
         out.append(lam)
     return out
 
 
-def matrix_spectrum(m: sympy.Matrix) -> tuple[str, object] | None:
+def matrix_spectrum(m: sympy.Matrix) -> tuple[str, object]:
     """``("radical", [(l, idx, alg)])`` with each eigenvalue in square roots over the rationals,
     its index in the minimal polynomial and its multiplicity; ``("roots", q)`` for an
-    irreducible characteristic polynomial ``q`` whose roots are not; None otherwise."""
+    irreducible characteristic polynomial ``q`` whose roots are not; ``("mixed", ...)`` of
+    ``_mixed_spectrum`` otherwise."""
     lam = sympy.Dummy("lambda")
     cp = m.charpoly(lam).as_expr(lam)
     factors = sympy.factor_list(cp, lam)[1]
@@ -1834,7 +1836,7 @@ def matrix_spectrum(m: sympy.Matrix) -> tuple[str, object] | None:
     if hard:
         if len(factors) == 1 and factors[0][1] == 1:
             return "roots", sympy.Poly(factors[0][0], lam)
-        return None
+        return "mixed", _mixed_spectrum(m, factors, lam)
     out = []
     for r, alg in eig:
         n = m - r * sympy.eye(m.rows)
@@ -1847,6 +1849,70 @@ def matrix_spectrum(m: sympy.Matrix) -> tuple[str, object] | None:
             idx, prev = idx + 1, rk
         out.append((r, idx, alg))
     return "radical", out
+
+
+def _factor_index(m: sympy.Matrix, q: sympy.Poly, mult: int) -> int:
+    """The exponent of the irreducible factor ``q`` in the minimal polynomial of ``m``."""
+    qm = sympy.zeros(m.rows, m.cols)
+    pw = sympy.eye(m.rows)
+    for c in reversed(q.all_coeffs()):
+        qm += c * pw
+        pw = (m * pw).applyfunc(sympy.expand)
+    idx, cur = 1, qm
+    prev = cur.rank(simplify=True)
+    while idx < mult:
+        cur = (cur * qm).applyfunc(sympy.expand)
+        rk = cur.rank(simplify=True)
+        if rk == prev:
+            break
+        idx, prev = idx + 1, rk
+    return idx
+
+
+def _mixed_spectrum(
+    m: sympy.Matrix, factors: Sequence[tuple[Expr, int]], lam: sympy.Symbol
+) -> tuple[list[tuple[Expr, int]], list[tuple[sympy.Poly, int]]]:
+    """``(eigenvalues, factors)``: each eigenvalue with its index, in square roots or as an
+    eigenvalue symbol, and each irreducible factor with its exponent in the minimal
+    polynomial."""
+    eigs: list[tuple[Expr, int]] = []
+    facs: list[tuple[sympy.Poly, int]] = []
+    start = 0
+    for q, mult in factors:
+        qp = sympy.Poly(q, lam)
+        idx = _factor_index(m, qp, mult)
+        facs.append((qp, idx))
+        deg = qp.degree()
+        rts = sympy.roots(q, lam) if deg <= 4 else {}
+        if sum(rts.values()) == deg and all(_plain_radical(r) for r in rts):
+            eigs += [(r, idx) for r in rts]
+        else:
+            eigs += [(s, idx) for s in root_symbols(qp, start)]
+            start += deg
+    return eigs, facs
+
+
+HERMITE: dict[sympy.Symbol, tuple[int, int, int]] = {}
+"""The symbol ``h_a_r_m`` of each coefficient of a Hermite basis polynomial: ``(a, r, m)``."""
+
+
+def hermite_atoms(f: object, c: Expr, eigs: Sequence[tuple[Expr, int]]) -> list[Expr]:
+    """The coefficients ``sum_{a, r} phi_a_r h_a_r_m`` of ``x^m`` of the Hermite interpolation
+    of ``f(c x)`` on ``eigs``: ``phi_a_r = (d/dx)^r f(c x)/r!`` at ``l_a`` and ``h_a_r_m`` the
+    coefficient of ``x^m`` in the basis polynomial ``H_a_r``, of degree below ``sum m``, with
+    ``H_a_r^(s)(l_b)/s! = [a = b][r = s]``."""
+    x = sympy.Dummy("x")
+    g = f(c * x)  # type: ignore[operator]
+    deg = sum(mj for _, mj in eigs)
+    coeffs = [sympy.Integer(0)] * deg
+    for a, (la, ma) in enumerate(eigs):
+        for r in range(ma):
+            phi = sympy.diff(g, x, r).subs(x, la) / sympy.factorial(r)
+            for m in range(deg):
+                h = sympy.Symbol(f"h_{a}_{r}_{m}", complex=True)
+                HERMITE[h] = (a, r, m)
+                coeffs[m] += phi * h
+    return [sympy.expand(v) for v in coeffs]
 
 
 def hermite(f: object, c: Expr, spec: Sequence[tuple[Expr, int]]) -> list[Expr]:
@@ -1891,13 +1957,36 @@ def _matrix_function(
         return None
     m = sympy.Matrix(g.matrix())
     f = scalar_function(name, t)
-    spec = matrix_spectrum(m)
-    if spec is None:
-        raise OperatorError(
-            f"cannot compute {what}: a characteristic polynomial with a repeated factor "
-            "whose roots are not square roots over the rationals"
+    kind, data = matrix_spectrum(m)
+    if kind == "mixed":
+        eigs, facs = cast(tuple[list[tuple[Expr, int]], list[tuple[sympy.Poly, int]]], data)
+        if name in MULTIVALUED:
+            NOTES.append(f"note: {what} takes the principal branch of {name} at each eigenvalue")
+        coeffs = hermite_atoms(f, scale, eigs)
+        out = sympy.zeros(m.rows, m.cols)
+        power = sympy.eye(m.rows)
+        for k, ak in enumerate(coeffs):
+            if k:
+                power = (m * power).applyfunc(sympy.expand)
+            out += ak * power
+        out = out.applyfunc(sympy.expand)
+        x = sympy.Symbol("x")
+        for qp, _ in facs:
+            syms = [s for s, _ in eigs if s in ROOTS and ROOTS[s][0] == qp]
+            if syms:
+                names = ", ".join(str(s) for s in syms)
+                NOTES.append(
+                    f"note: {names} are the roots of {sympy.sstr(qp.as_expr().subs(qp.gen, x))}"
+                )
+        labels = ", ".join(f"{a}: {sympy.sstr(la)}" for a, (la, _) in enumerate(eigs))
+        deg = sum(mj for _, mj in eigs)
+        NOTES.append(
+            f"note: h_a_r_m is the coefficient of x^m in the polynomial H_a_r of degree below "
+            f"{deg} with H_a_r^(s)(l_b)/s! = [a = b][r = s] at the eigenvalues l of the indices "
+            f"{labels}"
         )
-    kind, data = spec
+        entries = [[out[r, c] for c in range(out.cols)] for r in range(out.rows)]
+        return _matrix_from(g, entries, what)
     if kind == "roots":
         assert isinstance(data, sympy.Poly)
         if name in MULTIVALUED:

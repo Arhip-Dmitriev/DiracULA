@@ -1096,7 +1096,7 @@ class Vars:
         """An amplitude as terms: a coefficient, deltas, roots of unity and powers of coefficient
         atoms."""
         out = []
-        amp = self.angles(self.unit_param(self.grover(sympy.sympify(amp))))
+        amp = self.angles(self.unit_param(self.grover(self.root_atoms(sympy.sympify(amp)))))
         expanded = sympy.expand(amp, log=False, power_exp=False, power_base=False)
         for term in sympy.Add.make_args(expanded):
             if term == 0:
@@ -1110,24 +1110,54 @@ class Vars:
                 out += self.amp(simpler)
         return out
 
+    def root_atoms(self, e: sympy.Expr) -> sympy.Expr:
+        """``e`` with each function value at an eigenvalue symbol read as a coefficient atom of
+        its own, named by the value."""
+        from diracula import operators as O
+
+        roots = set(O.ROOTS)
+        if not (e.free_symbols & roots):
+            return e
+
+        def hit(g: sympy.Basic) -> bool:
+            if isinstance(g, (sympy.exp, sympy.cos, sympy.sin, sympy.tan, sympy.log)):
+                return bool(g.free_symbols & roots)
+            return (
+                isinstance(g, sympy.Pow) and not g.exp.is_Integer and bool(g.free_symbols & roots)
+            )
+
+        def name(g: sympy.Basic) -> sympy.Symbol:
+            return sympy.Symbol(sympy.sstr(g), complex=True)
+
+        return e.replace(hit, name)
+
+    def grover_dim(self, big: sympy.Expr) -> tuple[sympy.Symbol, sympy.Symbol] | None:
+        """``(u_N, q_N)`` of a dimension ``N`` that is one dimension symbol, registered; None
+        otherwise."""
+        try:
+            dm = self.dmon(big)
+        except CertifyError:
+            return None
+        if dm[0] != 1 or sum(dm[1]) != 1 or dm[1][-1] != 1:
+            return None
+        i = len(dm[1]) - 1
+        self.needs_width = True
+        u = sympy.Symbol(f"u_{i}", nonzero=True)
+        q = sympy.Symbol(f"q_{i}", positive=True)
+        self.gsyms[u], self.gsyms[q] = GB + 4 * i, GB + 4 * i + 2
+        return u, q
+
     def grover(self, e: sympy.Expr) -> sympy.Expr:
         """``e`` with ``cos(c θ)``, ``sin(c θ)`` of ``θ = acos(1 - 2/N)`` for a dimension ``N``
         read through ``u = u_N``, ``θ = 2 asin(N^(-1/2))``: ``cos(c θ) = (u^(2c) + u^(-2c))/2``,
-        ``sin(c θ) = (u^(2c) - u^(-2c))/(2 i)``, and ``sqrt(N - 1) = sqrt(N)/(2 q_N)``."""
+        ``sin(c θ) = (u^(2c) - u^(-2c))/(2 i)``; and half-integer powers of ``N - 1`` and
+        ``1 - 1/N`` read through ``sqrt(N - 1) = sqrt(N)/(2 q_N)``."""
         acs = [f for f in e.atoms(sympy.acos) if f.args[0].free_symbols]
         for f in acs:
-            big = sympy.simplify(2 / (1 - f.args[0]))
-            try:
-                dm = self.dmon(big)
-            except CertifyError:
+            got = self.grover_dim(sympy.simplify(2 / (1 - f.args[0])))
+            if got is None:
                 continue
-            if dm[0] != 1 or sum(dm[1]) != 1 or dm[1][-1] != 1:
-                continue
-            i = len(dm[1]) - 1
-            self.needs_width = True
-            u = sympy.Symbol(f"u_{i}", nonzero=True)
-            q = sympy.Symbol(f"q_{i}", nonzero=True)
-            self.gsyms[u], self.gsyms[q] = GB + 4 * i, GB + 4 * i + 2
+            u, _ = got
 
             def trig(g: sympy.Basic, f: sympy.Basic = f) -> bool:
                 return isinstance(g, (sympy.cos, sympy.sin)) and g.args[0].has(f)
@@ -1141,19 +1171,49 @@ class Vars:
 
             e = e.replace(trig, rd)
 
-            def root(g: sympy.Basic, big: sympy.Expr = big) -> bool:
-                return (
-                    g.is_Pow
-                    and g.exp in (sympy.Rational(1, 2), sympy.Rational(-1, 2))
-                    and sympy.expand(g.base - big + 1) == 0
-                )
+        def half(g: sympy.Basic) -> sympy.Expr | None:
+            if not (g.is_Pow and (2 * g.exp).is_Integer and not g.exp.is_Integer):
+                return None
+            b = sympy.expand(g.base)
+            for big, form in ((b + 1, "m"), (sympy.simplify(1 / (1 - b)), "r")):
+                if not big.free_symbols or big.has(sympy.Pow) is False:
+                    continue
+                got = self.grover_dim(big)
+                if got is None:
+                    continue
+                q = got[1]
+                base = sympy.sqrt(big) / (2 * q) if form == "m" else 1 / (2 * q)
+                return base ** int(2 * g.exp)
+            return None
 
-            def rr(g: sympy.Basic, big: sympy.Expr = big, q: sympy.Symbol = q) -> sympy.Expr:
-                v = sympy.sqrt(big) / (2 * q)
-                return v if g.exp > 0 else 1 / v
-
-            e = e.replace(root, rr)
+        e = e.replace(lambda g: half(g) is not None, lambda g: half(g))
+        e = e.replace(
+            lambda g: isinstance(g, sympy.conjugate), lambda g: sympy.conjugate(g.args[0])
+        )
         return e
+
+    def prime_angles(self, exprs: Sequence[sympy.Expr]) -> None:
+        """Fixes the unit of each angle ``r t`` of the exponents ``i c t`` in ``exprs`` as the
+        reciprocal of the least common denominator of its rational multiples."""
+        dens: dict[tuple[sympy.Symbol, sympy.Expr], int] = {}
+        for e in exprs:
+            for term in sympy.Add.make_args(sympy.expand(e)):
+                syms = self.real_angle_symbols(term)
+                if len(syms) != 1:
+                    continue
+                t = syms[0]
+                c = sympy.simplify(term / (sympy.I * t))
+                if not (c.is_real and not c.free_symbols):
+                    continue
+                q, r = sympy.sympify(c).as_coeff_Mul()
+                key = (t, r)
+                dens[key] = int(sympy.ilcm(dens.get(key, 1), sympy.Rational(q).q))
+        for key, den in dens.items():
+            if key in self.angle_bases:
+                continue
+            if key[1] == 1 and (den == 1 or key[0] in self.angle_atoms):
+                continue
+            self.angle_bases[key] = sympy.Rational(1, den)
 
     def real_angle_symbols(self, e: sympy.Basic) -> list[sympy.Symbol]:
         return [
@@ -1227,7 +1287,11 @@ class Vars:
                 if not (c.is_Integer or integer_index(c)) and self.cfunc_match(term):
                     rest += term
                     continue
-                if not (c.is_Integer or integer_index(c)) and c.is_real and not c.free_symbols:
+                if (
+                    c.is_real
+                    and not c.free_symbols
+                    and (not c.is_Integer or (t, sympy.Integer(1)) in self.angle_bases)
+                ):
                     q, r = sympy.sympify(c).as_coeff_Mul()
                     key = (t, r)
                     if key not in self.angle_bases:
@@ -1357,6 +1421,15 @@ class Vars:
                         isinstance(y, sympy.Symbol)
                         and y in self.ids
                         and self.ranges.get(self.ids[y]) == m
+                    )
+                    or (
+                        isinstance(y, sympy.Symbol)
+                        and not isinstance(y, sympy.Dummy)
+                        and y.is_integer
+                        and y not in self.ids
+                        and y not in self.dsyms
+                        and y not in self.widths
+                        and y not in self.loops
                     )
                 )
                 if ok:
@@ -2033,6 +2106,7 @@ class Certifier:
         self.nrm_obls: list[tuple[Prog, list[Y.DMon], ATm, sympy.Expr]] = []
         self.side_obls: list[tuple[str, Prog, list[ATm]]] = []
         self.side_rgs: dict[int, list[tuple[int, Y.DMon]]] = {}
+        self.last_rg: list[tuple[int, Y.DMon]] | None = None
         """Theorems a translation relies on: a title, a program and its value."""
         self.channels: Mapping[str, object] = {}
         self.aliases: Mapping[str, object] = {}
@@ -2837,20 +2911,29 @@ class Certifier:
         def side(title: str, p: Prog, q: Prog) -> None:
             self.side_obls.append((f"{title}, which gives {label}", p, prog_sym(q) or []))
 
+        mat = self.gate_matrix(a_node)
+        eye = sympy.eye(mat.rows) if mat is not None else None
+
+        def maybe(power: int, target: str) -> bool:
+            if mat is None:
+                return True
+            got = (mat**power).applyfunc(sympy.expand)
+            return bool(got == (eye if target == "I" else mat))
+
         square = mul(a, a)
-        if self.holds(square, ident):
+        if maybe(2, "I") and self.holds(square, ident):
             side(f"{base}^2 = I", square, ident)
             plus = Prog("add", (ident, a))
             minus = Prog("add", (ident, Prog("mul", (MINUS, a))))
             return Prog("add", (lin(f(c) / 2, plus), lin(f(-c) / 2, minus)))  # type: ignore[operator]
-        if self.holds(square, a):
+        if maybe(2, "A") and self.holds(square, a):
             side(f"{base}^2 = {base}", square, a)
             rest = Prog("add", (ident, Prog("mul", (MINUS, a))))
             return Prog("add", (lin(f(sympy.Integer(0)), rest), lin(f(c), a)))  # type: ignore[operator]
         pw = [ident, a, square]
         for m in range(3, O.MAX_ORDER + 1):
             pw.append(mul(a, pw[-1]))
-            if self.holds(pw[m], ident):
+            if maybe(m, "I") and self.holds(pw[m], ident):
                 side(f"{base}^{m} = I", pw[m], ident)
                 om = sympy.exp(2 * sympy.pi * sympy.I / m)
                 total: Prog | None = None
@@ -2869,35 +2952,105 @@ class Certifier:
             vals, leaf_a = diag
             side(f"{base} is diagonal", a, leaf_a)
             return self.diag_leaf([f(c * v) for v in vals], lay)  # type: ignore[operator]
-        eig = self.matrix_eigenvalues(a_node)
-        if eig is not None:
-            ident = self.matrix_ident(a_node, lay, len(eig))
-            minimal: Prog | None = None
-            for lv in eig:
-                fac = Prog("add", (a, lin(-lv, ident)))
-                minimal = fac if minimal is None else mul(fac, minimal)
-            assert minimal is not None
-            zero = Prog("leaf", ([],))
-            rg = [(i, m) for i, m in enumerate(levels)] + [
-                (IN + i, m) for i, m in enumerate(levels)
-            ]
-            plain = self.holds(minimal, zero)
-            if plain or self.holds_rg(minimal, zero, rg):
-                if not plain:
-                    self.side_rgs[len(self.side_obls)] = rg
-                side(f"the minimal polynomial of {base}", minimal, zero)
-                total = None
-                for j, lj in enumerate(eig):
-                    ej: Prog = ident
-                    for k, lk in enumerate(eig):
-                        if k != j:
-                            fac = Prog("add", (a, lin(-lk, ident)))
-                            ej = mul(lin(1 / (lj - lk), fac), ej)
-                    part = lin(f(c * lj), ej)  # type: ignore[operator]
-                    total = part if total is None else Prog("add", (total, part))
-                assert total is not None
-                return total
+        mat0 = self.gate_matrix(a_node)
+        full = O.matrix_spectrum(mat0) if mat0 is not None else None
+        if mat0 is not None and full is not None:
+            xv = sympy.Dummy("x")
+            if full[0] == "roots":
+                q = full[1]
+                assert isinstance(q, sympy.Poly)
+                char = [sympy.Integer(v) for v in reversed(q.all_coeffs())]
+                lams = O.root_symbols(q)
+                coef = [sympy.Integer(0)] * len(lams)
+                for j, lj in enumerate(lams):
+                    others = sympy.Mul(*(xv - lk for k, lk in enumerate(lams) if k != j))
+                    cs = sympy.Poly(others, xv).all_coeffs()[::-1]
+                    for m, cm in enumerate(cs):
+                        coef[m] += f(c * lj) * O.WEIGHTS[lj] * cm  # type: ignore[operator]
+                title = f"q({base}) = 0 for its characteristic polynomial q"
+            else:
+                spec = cast(list[Any], full[1])
+                mu = sympy.Mul(*((xv - lv) ** idx for lv, idx, _ in spec))
+                char = [sympy.expand(v) for v in reversed(sympy.Poly(mu, xv).all_coeffs())]
+                self.vs.prime_angles([sympy.expand(c * lv) for lv, _, _ in spec])
+                coef = O.hermite(f, c, [(lv, idx) for lv, idx, _ in spec])
+                title = f"the minimal polynomial of {base}"
+            pws = self.matrix_powers(a_node, a, lay, mat0, len(char) - 1, base, label)
+            if pws is not None:
+                zero = Prog("leaf", ([],))
+                qa: Prog | None = None
+                for k, ck in enumerate(char):
+                    if ck != 0:
+                        part = lin(ck, pws[k])
+                        qa = part if qa is None else Prog("add", (qa, part))
+                assert qa is not None
+                if self.side_holds(title, qa, zero, label):
+                    total = None
+                    for m, cm in enumerate(coef):
+                        cm = sympy.expand(cm)
+                        if cm == 0:
+                            continue
+                        part = lin(cm, pws[m])
+                        total = part if total is None else Prog("add", (total, part))
+                    if total is None:
+                        total = Prog("mul", (Prog("leaf", ([],)), pws[0]))
+                    return total
         raise CertifyError(f"{label}: no certified spectral form")
+
+    def side_holds(self, title: str, p: Prog, q: Prog, label: str) -> bool:
+        """Records ``p = q`` as a side theorem when the mirror predicts the normaliser proves
+        it, plainly or at every input in range."""
+        lay_rg = self.last_rg
+        if self.holds(p, q):
+            plain = True
+        elif lay_rg is not None and self.holds_rg(p, q, lay_rg):
+            plain = False
+        else:
+            return False
+        if not plain:
+            self.side_rgs[len(self.side_obls)] = list(lay_rg or [])
+        self.side_obls.append((f"{title}, which gives {label}", p, prog_sym(q) or []))
+        return True
+
+    def matrix_powers(
+        self,
+        node: object,
+        a: Prog,
+        lay: Layout,
+        mat: sympy.Matrix,
+        n: int,
+        base: str,
+        label: str,
+    ) -> list[Prog] | None:
+        """``[A^0, ..., A^n]`` for the matrix gate ``node``: ``A^0`` and ``A^k``, ``k >= 2``,
+        explicit matrices, each ``A^k = A A^(k-1)`` a side theorem; None where one fails."""
+        levels = self.levels(lay)
+        self.last_rg = [(i, m) for i, m in enumerate(levels)] + [
+            (IN + i, m) for i, m in enumerate(levels)
+        ]
+        out = [self.matrix_leaf(node, lay, sympy.eye(mat.rows), "id"), a]
+        pw = mat
+        for k in range(2, n + 1):
+            pw = (mat * pw).applyfunc(sympy.expand)
+            leaf = self.matrix_leaf(node, lay, pw, f"pow{k}")
+            prod = Prog("app", (levels, a, out[-1]))
+            if not self.side_holds(f"{base}^{k} = {base} {base}^{k - 1}", prod, leaf, label):
+                return None
+            out.append(leaf)
+        return out[: n + 1]
+
+    def matrix_leaf(self, node: object, lay: Layout, mat: sympy.Matrix, suffix: str) -> Prog:
+        """The explicit matrix ``mat`` on the registers of the matrix gate ``node``."""
+        from diracula import lang as L
+
+        rows = tuple(tuple(L.Num(mat[r, cc]) for cc in range(mat.cols)) for r in range(mat.rows))
+        name = f"{_op_label(node)}_{suffix}"
+        tree = GateTree(
+            getattr(self.trees.get(_op_label(node)), "slots", ()), L.MatrixNode(rows), name
+        )
+        prog, out = self.matrix_gate(name, tree, lay)
+        self.match(out, lay)
+        return prog
 
     def matrix_ident(self, node: object, lay: Layout, size: int) -> Prog:
         """The identity on the registers of the matrix gate ``node`` as an explicit matrix."""
@@ -2915,31 +3068,19 @@ class Certifier:
         self.match(out, lay)
         return prog
 
-    def matrix_eigenvalues(self, node: object) -> list[sympy.Expr] | None:
-        """The distinct eigenvalues in radicals of an operator given by a matrix whose
-        characteristic polynomial has no repeated root; None otherwise."""
+    def gate_matrix(self, node: object) -> sympy.Matrix | None:
+        """The matrix of an operator given by a matrix of concrete size, or None."""
+        from diracula import lang as L
         from diracula import pathsum as P
 
         if "value" not in self.hooks:
             return None
-        from diracula import lang as L
-
         try:
             g = self.hooks["value"](node)
         except (L.LangError, CertifyError, ValueError, TypeError, AttributeError):
             return None
         matrix = getattr(g, "matrix", None) if isinstance(g, P.Gate) else None
-        if matrix is None:
-            return None
-        m = sympy.Matrix(matrix())
-        lam = sympy.Dummy("lambda")
-        poly = sympy.Poly(m.charpoly(lam).as_expr(lam), lam)
-        roots = sympy.roots(poly, multiple=False)
-        if sum(roots.values()) != m.rows or any(v > 1 for v in roots.values()):
-            return None
-        if any(r.has(sympy.CRootOf) for r in roots):
-            return None
-        return [sympy.nsimplify(r) if r.is_number else r for r in roots]
+        return None if matrix is None else sympy.Matrix(matrix())
 
     def local_exp(self, c: sympy.Expr, node: object, lay: Layout, label: str) -> Prog | None:
         """``exp(c sum_{j<n} I^@j @ G @ I^@(n-1-j))`` on one register of ``n`` qubits, ``G``
@@ -4212,7 +4353,24 @@ class Certifier:
         if er is None:
             raise CertifyError("the printed operator does not translate")
         if counts(pl) or counts(pr):
-            raise CertifyError("an operator with loops")
+            self.check(pl, er)
+            if self.real_rs or self.ctx_used or getattr(self, "gauss_used", False):
+                raise CertifyError("an operator with loops and facts about its parameters")
+            stmt = (
+                f"∀ ν : ℕ → ℤ, (∀ c ∈ {pl.name}.counts ++ {pr.name}.counts, 0 ≤ ipDen ν c) "
+                f"→ {pl.name}.sem V ν = {pr.name}.sem V ν"
+            )
+            proof = (
+                f"certify_eq_lit_c V hρ FL FLOK PW PWOK {pl.name} {pr.name} SYM RSYM NF "
+                + DECIDES
+                + " (by decide +kernel) (by decide +kernel)"
+            )
+            extra = [
+                "/-- The printed operator as one expression. -/\ndef RSYM : List ATm :=\n  "
+                + f"{self.text.ex(er)}\n",
+                *self.hint_decls(),
+            ]
+            return self.source(label, f"{self.script}_show_{_clean(label)}", stmt, proof, extra, [])
         rgd: list[str] = []
         try:
             self.check(pl, er)
@@ -5204,6 +5362,19 @@ class Certifier:
                     )
                 ]
                 if vs.gsyms
+                else []
+            ),
+            *(
+                [
+                    (
+                        "  Eigenvalue atoms: λ_j, w_j and each function value at λ_j are "
+                        "coefficient atoms, so the theorem holds for all their values, in "
+                        "particular for λ_j the roots of the matrix's characteristic polynomial q "
+                        "(proved q(A) = 0) "
+                        "and w_j = 1/q'(λ_j)."
+                    )
+                ]
+                if any(str(c).startswith(("λ_", "w_")) for c in vs.catoms)
                 else []
             ),
             "-/",

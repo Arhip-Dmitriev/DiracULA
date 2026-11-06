@@ -1706,7 +1706,7 @@ def norm_a(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], r: int, t: AT
         t2 = canon_a(fl, pw, a_elim_all(pw, len(t[1]) + 1, t))
         if t2 is None:
             return None
-        t = t2
+        t = aps_canon(t2)
     return t
 
 
@@ -1742,6 +1742,17 @@ def nf_a(
         if n is not None:
             acc = ta_add(n, acc)
     return acc
+
+
+def aps_canon(t: ATm) -> ATm:
+    """``apsCanon``."""
+    out: tuple[APw, ...] = ()
+    for a in reversed(t[5]):
+        if not a[2] and ap_merge(a[0]):
+            out = ap_ins((a[0], a[1]), out)
+        else:
+            out = (a, *out)
+    return (t[0], t[1], t[2], t[3], t[4], out)
 
 
 def ax_neg(e: Sequence[ATm]) -> list[ATm]:

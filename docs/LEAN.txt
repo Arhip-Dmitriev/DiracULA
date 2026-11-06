@@ -33,7 +33,8 @@ See INSTALL.txt, section 3. In brief, from the library directory diracula/lean:
 The library DiracULA depends on Mathlib only. Base, Sym, SymNorm and SymCanon define symbolic
 sums and their verified normaliser (section 6.1); LSym, LDigit, LTable and LCanon extend them
 with integer atoms; LPass rewrites atoms under facts about free variables (section 6.3); Lang
-gives programs their meaning. In the shell,
+gives programs their meaning; Gauss proves the quadratic Gauss sum and LGauss closes such sums
+in a normal form (section 6.4). In the shell,
 --certify DIR writes certificates and --check checks each with Lean (SHELL.txt, section 3.5).
 
 
@@ -48,13 +49,14 @@ section 3.5) write one Lean file per result of a .ula program. Its main theorem 
         P.sem V = fun ν => axDen V ν R
 
 P is the program as a Prog, R the printed value as an expression. V gives the values of the
-dimension symbols (V.ρ.dv), the coefficient atoms and the functions a program calls
-(V.fa); ν gives every index variable: output register i is ν i, input register i of a gate
-is ν (IN + i), each parameter of the program (a var symbol) is ν (2000 + k). The theorem
-holds for every V and every ν, so for every value of the symbols. Its hypotheses state the
-range facts used: 2 ≤ d for each dimension, n : ℕ with ρ.dv k = d ^ n for each register of
-d^n levels (d ^ (n + c) for the least offset c of the program, every other power of d written
-over it), 1 ≤ n where the result needs it, and one hypothesis per assume statement.
+dimension symbols (V.ρ.dv), the coefficient atoms, the functions a program calls (V.fa)
+and the opaque functions of an index (V.fc); ν gives every index variable: output register
+i is ν i, input register i of a gate is ν (IN + i), each parameter of the program (a var
+symbol) is ν (2000 + k). The theorem holds for every V and every ν, so for every value of
+the symbols. Its hypotheses state the range facts used: 2 ≤ d for each dimension, n : ℕ
+with ρ.dv k = d ^ n for each register of d^n levels (d ^ (n + c) for the least offset c of
+the program, every other power of d written over it), 1 ≤ n where the result needs it, and
+one hypothesis per assume statement.
 V.ρ.OK states that every dimension is positive, every coefficient atom is nonzero and the
 atoms come in conjugate pairs (atom 2j + 1 is the conjugate of atom 2j), so that a result
 with complex parameters holds for every nonzero value of them. An integer parameter that only
@@ -126,7 +128,9 @@ The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read a
                         V U = I for the operator V used (a side theorem), so V is the inverse.
   Power U^n, concrete   n applications of U, or of the inverse for n < 0.
   Power U^k |s>, k      the loop of k steps of U from |s> (section 6.2), its invariant the
-  symbolic              engine's U^J |s>; proved by induction on k.
+  symbolic              engine's U^J |s>; proved by induction on k. A rotation such as the
+                        Grover iterate's cos(k acos(1 - 2/2^n)) is read through the built-in
+                        values u_N, q_N, its checks closed up to their relations (section 6.2).
   Density matrix        a ket |s> as ten k s (cnj s); a channel or gate K applied to it as app
                         over both halves with the kernel ten k K (cnj K); a family of Kraus
                         operators as a sum over its index.
@@ -143,16 +147,31 @@ The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read a
                         polynomial identity of A (a side theorem). A diagonal A on one register
                         of at most 4 levels is the kernel sum_v f(c a(v)) [o = v][x = v], with
                         the theorem that A is that diagonal.
+  exp(c sum_{j<n} I^@j @ G @ I^@(n-1-j))
+                        on one register of n qubits, G a gate defined as |y> -> a(y) |y>: the
+                        kernel [o = x] e^(c (a(0) (n - pop(o)) + a(1) pop(o))), pop the digit sum.
+  exp(c A), A |y>_d = |(y + s) % d>_d, s = ±1
+                        sum_k g(k) E_k, E_k = (1/d) w^(k (o - x)), g(k) = e^(c w^(-k s)) an
+                        opaque function V.fc of k; the file proves A = sum_k w^(-k s) E_k,
+                        sum_k E_k = I and E_k E_l = [k = l] E_k (side theorems).
 
 A side theorem states that a channel is trace preserving, sum_k K_k^dagger K_k = I, when the
 normaliser proves it. A phase e^(i c t), cos(c t) or sin(c t) of a real symbol t and an
 integer c is read through the coefficient atom z = e^(i t), e^(-i t) as its conjugate atom; the
 theorem then holds for every nonzero z, in particular z = e^(i t). Where the normaliser needs
 |z| = 1, the theorem has the hypothesis z conj(z) = 1 for each such atom, under which the
-exponent of the conjugate atom is moved onto z negated (unitT, certify_unit_c). A real
+exponent of the conjugate atom is moved onto z negated (unitT, certify_unit_c). A phase
+e^(i E t) of an integer index expression E is the power z^E of the atom, a factor of the term
+whose exponent E is read through its own table of atoms (ATm.aps); a width n in E is read as a
+parameter of the program, as in a loop count. A real
 parameter p assumed in 0..1 is read as sin^2(a) for an angle a in 0..pi/2 through the atom
 z = e^(i a): sqrt(p) as (z - conj z)/(2 i), sqrt(1 - p) as (z + conj z)/2 and p as
 (2 z conj z - z^2 - conj(z)^2)/4; this certifies depolarize(p), dephase(p) and amp_damp(p).
+An angle theta = acos(1 - 2/N) of a dimension N is read through the built-in values
+u_N = e^(i asin(N^(-1/2))) and q_N = 1/(u_N + 1/u_N) (LSym.gfn), as powers of the term:
+cos(c theta) = (u_N^(2c) + u_N^(-2c))/2, sin(c theta) = (u_N^(2c) - u_N^(-2c))/(2 i) and
+sqrt(N - 1) = sqrt(N)/(2 q_N). Unlike a coefficient atom, they are fixed functions of N, so
+the theorem has no hypothesis about them.
 Each Lean definition carries the .ula line it translates as a comment.
 
 5. INTEGER ATOMS
@@ -244,12 +263,22 @@ Besides these moves, the normaliser
   - reads a delta [N ∣ u R - v R] as [d ∣ u - v] for the repunit R = (N - 1)/(d - 1) of
     N = d^m, d dividing N, and atoms u, v reduced modulo d (repDel): R ≡ 1 mod d;
   - sums a variable of one value as its value 0 (elimOne);
+  - under a delta [M ∣ s x + b], s = ±1, reads x as -s b in the arguments of the atoms of a
+    power z^E that read x only through arguments reduced modulo a divisor of M (apsPin), so
+    that x can then be eliminated;
   - orders the atom table canonically, each step the atom of least key among those that read
     no atom left, names the atoms by first occurrence in the factors and then in the table,
     renames bound variables by first occurrence and sorts the sums.
 A loop is proved by induction on its count: the engine's invariant S(J) is shown to equal
 the initial state at J = lo and to satisfy S(J + 1) = step_J(S(J)), both by the normaliser
-with J free.
+with J free. A power z^E of an index without atoms of its own is substituted in its exponent,
+and dropped at exponent 0. Where the built-in values occur, each check closes after adding
+p · R for cofactors p written in the file and the relations R = 0 proved in Lean for N ≥ 2:
+
+  sqrt(N) u_N - sqrt(N) u_N^(-1) - 2 i = 0,        q_N u_N + q_N u_N^(-1) - 1 = 0      (relM).
+
+The cofactors are found by linear algebra over cofactor monomials; powers of the same index
+in a product add their exponents (apIns).
 
 6.3 Rewriting under facts about free variables
 
@@ -267,6 +296,21 @@ its width links and divisibilities (section 3); where one normalisation leaves t
 normal form is rewritten and normalised once more. A delta [M ∣ s z + R] of a remainder
 z = mod(u, N - 1), u = mod(y, N), is split into the three terms
 [M ∣ s u + R] - [N ∣ u + 1] [M ∣ s u + R] + [N ∣ u + 1] [M ∣ R].
+
+6.4 Quadratic Gauss sums
+
+Gauss proves, for every d ≥ 1,
+
+  sum_{y < d} e^(2 pi i y^2/d) = sqrt(d) (1 + i)(1 + (-i)^d)/2,
+
+from the functional equation of the Jacobi theta function: theta(x0 + z) split by residues
+modulo c and each class read through the functional equation of the two-variable theta gives
+sqrt(-i z) theta(x0 + z) -> (1/c) sum_{r < c} e^(pi i x0 r^2) as im(-1/z) -> infinity; the
+cusps x0 = 2/d and x0 = -d/2 are joined by theta(-1/tau) = sqrt(-i tau) theta(tau) along
+tau = 2/d + i/(n + 1). Where the normal form of a difference leaves a term whose last sum
+sum_{y < D} is read only by a root of unity omega_D^(k y^2), k = ±1, LGauss replaces it by
+sqrt(D)/2 (1 + i^k)(1 + omega_4^(-k D)), D read through a new atom of the dimension's value
+(gaussA), and normalises again (certify_gauss_c). This closes tr of a Fourier transform.
 
 7. WHAT IS TRUSTED
 ------------------
@@ -313,12 +357,9 @@ certified.
 Adjoints, inverses, integer and symbolic powers applied to states, traces, partial traces,
 partial and basis measurements, channels and their trace preservation, and functions of
 operators are certified (section 4). The following report "cannot certify":
-  - a power U^k whose iterate has amplitudes outside the coefficients, phases and atoms of
-    section 6.1, such as the rotation cos(k acos(1 - 2/2^n)) of the Grover iterate, and a
-    symbolic power of an operator not applied to a state;
-  - a function of an operator whose spectral form has such amplitudes: exp(i t sum_j Z_j) on a
-    symbolic number of qubits (an atom raised to a symbolic power), exp(i t S) of a shift
-    (e^(i t w^k)), and the trace closed by the quadratic Gauss sum (tr of a Fourier transform);
+  - a power U^k whose iterate has amplitudes outside the coefficients, phases, atoms and
+    built-in values of section 4, and a symbolic power of an operator not applied to a
+    state;
   - an explicit matrix whose eigenvalues are radicals (class F4 of LANGUAGE.txt, section 8.8);
   - an operator named by gate G = EXPRESSION is translated through EXPRESSION; an assertion
     between two states or two operators is certified only as a scalar equation, such as

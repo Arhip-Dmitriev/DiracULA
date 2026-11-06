@@ -3417,13 +3417,21 @@ theorem canonA_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.�
     rw [CMon.den_mul V.ρ hρ, ← canonF_some V.ρ hρ fl hfl _ _ k ds ps hk]
     ring
 
-/-- Eliminations and canonicalisation, alternated `r` times. -/
+/-- A term with its powers merged by `apsCanon`. -/
+def tCanonAps (t : ATm) : ATm := ⟨t.c, t.sums, t.ats, t.dels, t.phs, apsCanon t.aps⟩
+
+theorem tCanonAps_den (V : LV) (hρ : V.ρ.OK) (t : ATm) (ν : ℕ → ℤ) :
+    (tCanonAps t).den V ν = t.den V ν := by
+  unfold ATm.den abody tCanonAps
+  simp only [apsV_canon V hρ]
+
+/-- Eliminations and canonicalisation, alternated `r` times, the powers merged after each. -/
 def normA (fl : List ℕ) (PW : List (DMon × DMon)) : ℕ → ATm → Option ATm
   | 0, t => some t
   | r + 1, t =>
     match canonA fl PW (aElimAll PW (t.sums.length + 1) t) with
     | none => none
-    | some t' => normA fl PW r t'
+    | some t' => normA fl PW r (tCanonAps t')
 
 theorem normA_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ)
     (PW : List (DMon × DMon)) (hPW : PowOK PW V.ρ) (r : ℕ) (t : ATm) :
@@ -3438,11 +3446,11 @@ theorem normA_ok (V : LV) (hρ : V.ρ.OK) (fl : List ℕ) (hfl : FloorOK fl V.ρ
     · next h => rw [h] at hc; intro ν; rw [← he ν, hc ν]
     · next t' h =>
       rw [h] at hc
-      have := ih t'
+      have := ih (tCanonAps t')
       revert this
-      cases normA fl PW r t' with
-      | none => intro h' ν; rw [← he ν, ← hc ν, h' ν]
-      | some t'' => intro h' ν; rw [h' ν, hc ν, he ν]
+      cases normA fl PW r (tCanonAps t') with
+      | none => intro h' ν; rw [← he ν, ← hc ν, ← tCanonAps_den V hρ t' ν, h' ν]
+      | some t'' => intro h' ν; rw [h' ν, tCanonAps_den V hρ t' ν, hc ν, he ν]
 
 /-- The term without its rational coefficient. -/
 def ashape (t : ATm) : ATm := { t with c := { t.c with q := 0 } }

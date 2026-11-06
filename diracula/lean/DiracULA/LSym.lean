@@ -841,4 +841,63 @@ theorem elimPin_ok (V : LV) (hρ : V.ρ.OK) (x : ℕ) (D : DMon) (ats : List Ato
   rw [splits_spec ds p hp]
   exact elimPin1_ok V hρ x D ats _ _ _ _ e he
 
+/-- `a.2` added to the exponent of the power of index `a.1` without atoms of its own, in a list
+whose such powers are sorted by index. -/
+def apIns (a : ℕ × IPoly) : List APw → List APw
+  | [] => if ipAdd [] a.2 = [] then [] else [(a.1, ipAdd [] a.2, [])]
+  | b :: l =>
+    if b.2.2 = [] ∧ b.1 = a.1 ∧ apMerge a.1 = true then
+      (if ipAdd b.2.1 a.2 = [] then l else (b.1, ipAdd b.2.1 a.2, []) :: l)
+    else if b.2.2 = [] ∧ apMerge b.1 = true ∧ a.1 < b.1 then
+      (if ipAdd [] a.2 = [] then b :: l else (a.1, ipAdd [] a.2, []) :: b :: l)
+    else b :: apIns a l
+
+theorem ipDen_add0 (μ : ℕ → ℤ) (p : IPoly) : ipDen μ (ipAdd [] p) = ipDen μ p := by
+  rw [ipDen_add, ipDen_nil, zero_add]
+
+theorem apsV_apIns (V : LV) (hρ : V.ρ.OK) (a : ℕ × IPoly) (ha : apMerge a.1 = true)
+    (l : List APw) (μ : ℕ → ℤ) : apsV V (apIns a l) μ = apF V a.1 (ipDen μ a.2) * apsV V l μ := by
+  induction l with
+  | nil =>
+    simp only [apIns]
+    split_ifs with h
+    · have h0 : ipDen μ a.2 = 0 := by rw [← ipDen_add0, h, ipDen_nil]
+      rw [h0, apF_zero V a.1 ha]; simp [apsV]
+    · simp [apsV, aext, ipDen_add0]
+  | cons b l ih =>
+    simp only [apIns]
+    split_ifs with h1 h2 h3 h4
+    · obtain ⟨hb, hk, -⟩ := h1
+      have h0 : ipDen μ b.2.1 + ipDen μ a.2 = 0 := by rw [← ipDen_add, h2, ipDen_nil]
+      simp only [apsV, List.map_cons, List.prod_cons, hb, aext]
+      rw [hk, ← mul_assoc, ← apF_add V hρ a.1 ha, add_comm, h0, apF_zero V a.1 ha, one_mul]
+    · obtain ⟨hb, hk, -⟩ := h1
+      simp only [apsV, List.map_cons, List.prod_cons, hb, aext]
+      rw [ipDen_add, hk, apF_add V hρ a.1 ha]; ring
+    · have h0 : ipDen μ a.2 = 0 := by rw [← ipDen_add0, h4, ipDen_nil]
+      rw [h0, apF_zero V a.1 ha, one_mul]
+    · simp only [apsV, List.map_cons, List.prod_cons, aext, ipDen_add0]
+    · simp only [apsV, List.map_cons, List.prod_cons] at ih ⊢
+      rw [ih]; ring
+
+/-- Every power without atoms of its own merged into the powers of its index by `apIns`. -/
+def apsCanon (l : List APw) : List APw :=
+  l.foldr (fun a acc => if a.2.2 = [] ∧ apMerge a.1 = true then apIns (a.1, a.2.1) acc else a :: acc) []
+
+theorem apsV_canon (V : LV) (hρ : V.ρ.OK) (l : List APw) (μ : ℕ → ℤ) :
+    apsV V (apsCanon l) μ = apsV V l μ := by
+  induction l with
+  | nil => rfl
+  | cons a l ih =>
+    simp only [apsCanon, List.foldr_cons] at ih ⊢
+    split_ifs with h
+    · obtain ⟨h1, h2⟩ := h
+      rw [apsV_apIns V hρ (a.1, a.2.1) h2, ih]
+      obtain ⟨k, p, tb⟩ := a
+      simp only at h1 ⊢
+      subst h1
+      simp [apsV, aext]
+    · simp only [apsV, List.map_cons, List.prod_cons] at ih ⊢
+      rw [ih]
+
 end DiracULA.LSym

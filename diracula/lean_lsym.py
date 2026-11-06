@@ -15,7 +15,7 @@
 sums with integer atoms, their normaliser and the passes under facts, on tuples.
 
 An atom is ``(id, f, ks, dp, args)``, each argument ``(IPoly, DMon)``; a term is
-``(CMon, sums, atoms, dels, phs)``. Every function follows its Lean namesake, so that
+``(CMon, sums, atoms, dels, phs, aps)``. Every function follows its Lean namesake, so that
 :func:`nf_a` predicts ``nfA``.
 """
 
@@ -28,8 +28,14 @@ from typing import Any
 from diracula import lean_sym as Y
 
 Atom = tuple[int, int, tuple[int, ...], tuple[Y.DMon, ...], tuple[tuple[Y.IPoly, Y.DMon], ...]]
+APw = tuple[int, Y.IPoly, tuple[Atom, ...]]
 ATm = tuple[
-    Y.CMon, tuple[tuple[int, Y.DMon], ...], tuple[Atom, ...], tuple[Y.Fac, ...], tuple[Y.Fac, ...]
+    Y.CMon,
+    tuple[tuple[int, Y.DMon], ...],
+    tuple[Atom, ...],
+    tuple[Y.Fac, ...],
+    tuple[Y.Fac, ...],
+    tuple[APw, ...],
 ]
 
 ABASE = 3000000
@@ -56,8 +62,16 @@ def ids(l: Sequence[Atom]) -> list[int]:
     return [a[0] for a in l]
 
 
+def ap_vs(a: APw) -> list[int]:
+    return ip_vs(a[1]) + arg_vs(a[2]) + ids(a[2])
+
+
+def aps_vs(t: ATm) -> list[int]:
+    return [x for a in t[5] for x in ap_vs(a)]
+
+
 def fvs(t: ATm) -> list[int]:
-    return [x for f in (*t[3], *t[4]) for x in ip_vs(f[1])]
+    return [x for f in (*t[3], *t[4]) for x in ip_vs(f[1])] + aps_vs(t)
 
 
 def rvs(t: ATm) -> list[int]:
@@ -108,6 +122,7 @@ def t_ren(m: Callable[[int], int], t: ATm) -> ATm:
         tuple(at_ren(m, a) for a in t[2]),
         tuple(fac_ren(m, f) for f in t[3]),
         tuple(fac_ren(m, f) for f in t[4]),
+        tuple((a[0], ip_ren(m, a[1]), tuple(at_ren(m, b) for b in a[2])) for a in t[5]),
     )
 
 
@@ -119,7 +134,7 @@ def inj_on(m: Callable[[int], int], s: Sequence[int]) -> bool:
 
 
 def t_mul(s: ATm, t: ATm) -> ATm:
-    return (Y.cm_mul(s[0], t[0]), s[1] + t[1], s[2] + t[2], s[3] + t[3], s[4] + t[4])
+    return (Y.cm_mul(s[0], t[0]), s[1] + t[1], s[2] + t[2], s[3] + t[3], s[4] + t[4], s[5] + t[5])
 
 
 def t_mul_ok(s: ATm, t: ATm) -> bool:
@@ -540,11 +555,11 @@ def elim_lin_c(
 
 def a_elim_step(pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
     for pre, (x, d), post in Y._splits(t[1]):
-        if x in [y for y, _ in (*pre, *post)]:
+        if x in [y for y, _ in (*pre, *post)] or x in aps_vs(t):
             continue
         e = a_elim_var(pw, x, d, t[2], t[3], t[4])
         if e is not None:
-            return (Y.cm_mul(t[0], e[0]), pre + post, e[1], e[2], e[3])
+            return (Y.cm_mul(t[0], e[0]), pre + post, e[1], e[2], e[3], t[5])
     return None
 
 
@@ -573,6 +588,7 @@ def x_pin1(
         and y not in [u for u, _ in (*a2, *b2)]
         and x not in i
         and y not in i
+        and x not in aps_vs(t)
     ):
         v = Y.ip_v(y)
         return (
@@ -581,6 +597,7 @@ def x_pin1(
             tuple(at_sub(x, v, at) for at in t[2]),
             tuple(Y.fac_sub(x, v, g) for g in (*pre, *post)),
             tuple(Y.fac_sub(x, v, g) for g in t[4]),
+            t[5],
         )
     return None
 
@@ -599,12 +616,109 @@ def x_pin(t: ATm) -> ATm | None:
 def a_elim_step_u(pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
     """``aElimStepU``."""
     for pre, (x, d), post in Y._splits(t[1]):
-        if x in [y for y, _ in (*pre, *post)]:
+        if x in [y for y, _ in (*pre, *post)] or x in aps_vs(t):
             continue
         e = elim_pin_u(pw, x, d, t[2], t[3], t[4])
         if e is not None:
-            return (Y.cm_mul(t[0], e[0]), pre + post, e[1], e[2], e[3])
+            return (Y.cm_mul(t[0], e[0]), pre + post, e[1], e[2], e[3], t[5])
     return None
+
+
+def aps_per(x: int, m: Y.DMon, v: Y.IPoly, l: Sequence[APw]) -> bool:
+    """``apsPer``."""
+    return all(
+        not Y.ip_has(x, a[1]) and args_per(x, m, a[2]) and x not in ids(a[2]) and plain_p(a[2], v)
+        for a in l
+    )
+
+
+def aps_pin1(
+    t: ATm, x: int, pre: tuple[Y.Fac, ...], f: Y.Fac, post: tuple[Y.Fac, ...]
+) -> ATm | None:
+    """``apsPin1``."""
+    lin = Y.ip_lin(x, f[1])
+    if lin is None:
+        return None
+    a, b = lin
+    s = Y.ip_const(a)
+    if s is None:
+        return None
+    v = Y.pin_val(s, b)
+    if s in (1, -1) and plain_p(t[2], f[1]) and aps_per(x, f[0], v, t[5]) and x in aps_vs(t):
+        aps = tuple((e[0], e[1], tuple(at_sub(x, v, c) for c in e[2])) for e in t[5])
+        return (t[0], t[1], t[2], (*pre, f, *post), t[4], aps)
+    return None
+
+
+def aps_pin(t: ATm) -> ATm | None:
+    """``apsPin``."""
+    for x in abvs(t):
+        for pre, f, post in Y._splits(t[3]):
+            e = aps_pin1(t, x, pre, f, post)
+            if e is not None:
+                return e
+    return None
+
+
+# relations of the built-in angle powers
+
+FB = 1000000
+GB = 2000000
+
+
+def ap_merge(k: int) -> bool:
+    """``apMerge``."""
+    return k < FB or GB <= k
+
+
+def ap_ins(a: tuple[int, Y.IPoly], l: Sequence[APw]) -> tuple[APw, ...]:
+    """``apIns``."""
+    k, p = a
+    if not l:
+        q = Y.ip_add((), p)
+        return () if not q else ((k, q, ()),)
+    b, rest = l[0], l[1:]
+    if not b[2] and b[0] == k and ap_merge(k):
+        q = Y.ip_add(b[1], p)
+        return tuple(rest) if not q else ((k, q, ()), *rest)
+    if not b[2] and ap_merge(b[0]) and k < b[0]:
+        q = Y.ip_add((), p)
+        return tuple(l) if not q else ((k, q, ()), *l)
+    return (b, *ap_ins(a, rest))
+
+
+def rel_m(r: int, i: int) -> list[tuple[Y.CMon, tuple[tuple[int, Y.IPoly], ...]]]:
+    """``relM``."""
+    e = (0,) * i + (1,)
+    one, z = Fraction(1), Fraction(0)
+    if r == 0:
+        return [
+            ((one, z, e, (), (), ()), ((GB + 4 * i, Y.ip_c(1)),)),
+            ((-one, z, e, (), (), ()), ((GB + 4 * i, Y.ip_c(-1)),)),
+            ((Fraction(-2), Fraction(1, 4), (), (), (), ()), ()),
+        ]
+    return [
+        (Y.of_q(1), ((GB + 4 * i + 2, Y.ip_c(1)), (GB + 4 * i, Y.ip_c(1)))),
+        (Y.of_q(1), ((GB + 4 * i + 2, Y.ip_c(1)), (GB + 4 * i, Y.ip_c(-1)))),
+        (Y.of_q(-1), ()),
+    ]
+
+
+def rel_x(ks: Sequence[tuple[ATm, int, int]]) -> list[ATm]:
+    """``relX``."""
+    out = []
+    for p, r, i in ks:
+        for m, ents in rel_m(r, i):
+            aps: tuple[APw, ...] = p[5]
+            for e in reversed(ents):
+                aps = ap_ins(e, aps)
+            out.append((Y.cm_mul(p[0], m), p[1], p[2], p[3], p[4], aps))
+    return out
+
+
+def rel_ok(fl: Sequence[int], ks: Sequence[tuple[ATm, int, int]]) -> bool:
+    """``relOK``."""
+    return all(Y.flv(fl, i) >= 2 and r <= 1 for _, r, i in ks)
 
 
 def a_elim_all(pw: Sequence[tuple[Y.DMon, Y.DMon]], n: int, t: ATm) -> ATm:
@@ -615,6 +729,8 @@ def a_elim_all(pw: Sequence[tuple[Y.DMon, Y.DMon]], n: int, t: ATm) -> ATm:
             t2 = x_pin(r)
         if t2 is None:
             t2 = a_elim_step_u(pw, r)
+        if t2 is None:
+            t2 = aps_pin(r)
         if t2 is None:
             return t
         t = t2
@@ -705,7 +821,7 @@ def dz_step(pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm:
     if len(i) != len(set(i)):
         return t
     ds = tuple(dz_find(pw, t[2], f) or f for f in t[3])
-    return (t[0], t[1], t[2], ds, t[4])
+    return (t[0], t[1], t[2], ds, t[4], t[5])
 
 
 def is_zero_dig(a: Atom) -> bool:
@@ -721,6 +837,7 @@ def zero_at(t: ATm, pre: tuple[Atom, ...], a: Atom, post: tuple[Atom, ...]) -> A
             pre + tuple(at_sub(z, (), b) for b in post),
             tuple(Y.fac_sub(z, (), f) for f in t[3]),
             tuple(Y.fac_sub(z, (), f) for f in t[4]),
+            t[5],
         )
     return None
 
@@ -728,7 +845,7 @@ def zero_at(t: ATm, pre: tuple[Atom, ...], a: Atom, post: tuple[Atom, ...]) -> A
 def drop_at(t: ATm, pre: tuple[Atom, ...], a: Atom, post: tuple[Atom, ...]) -> ATm | None:
     z = a[0]
     if z not in fvs(t) and z not in arg_vs(post) and z not in ids(post):
-        return (t[0], t[1], pre + post, t[3], t[4])
+        return (t[0], t[1], pre + post, t[3], t[4], t[5])
     return None
 
 
@@ -749,6 +866,7 @@ def dedup_at(t: ATm, pre: tuple[Atom, ...], b: Atom, post: tuple[Atom, ...]) -> 
             t[2],
             tuple(Y.fac_sub(b[0], v, f) for f in t[3]),
             tuple(Y.fac_sub(b[0], v, f) for f in t[4]),
+            t[5],
         )
     return None
 
@@ -770,7 +888,7 @@ def dz_drop_at(t: ATm, pre: tuple[Atom, ...], a: Atom, post: tuple[Atom, ...]) -
         a[3],
         tuple(x for _, x in kept) + tuple(args[len(ks) :]),
     )
-    return (t[0], t[1], pre + (a2,) + post, t[3], t[4])
+    return (t[0], t[1], pre + (a2,) + post, t[3], t[4], t[5])
 
 
 def a_rule1(t: ATm) -> ATm | None:
@@ -821,7 +939,7 @@ def canon_ren(t: ATm) -> ATm:
             return ABASE + al.index(v)
         return v
 
-    if inj_on(m, all_v(t)) and wf_a(t[2]):
+    if inj_on(m, all_v(t)) and wf_a(t[2]) and all(v not in i for v in aps_vs(t)):
         return t_ren(m, t)
     return t
 
@@ -888,7 +1006,7 @@ def sort_tab(t: ATm) -> ATm:
         or sorted(lst) != sorted(t[2])
     ):
         return t
-    return (t[0], t[1], lst, t[3], t[4])
+    return (t[0], t[1], lst, t[3], t[4], t[5])
 
 
 def sort_sums(t: ATm) -> ATm:
@@ -901,7 +1019,7 @@ def sort_sums(t: ATm) -> ATm:
         while k < len(out) and not p[0] <= out[k][0]:
             k += 1
         out.insert(k, p)
-    return (t[0], tuple(out), t[2], t[3], t[4])
+    return (t[0], tuple(out), t[2], t[3], t[4], t[5])
 
 
 def dvd_p(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], k: Y.DMon, m: Y.DMon) -> bool:
@@ -934,6 +1052,7 @@ def mod_drop_at(
             t[2],
             tuple(Y.fac_sub(z, q, g) for g in t[3]),
             tuple(Y.fac_sub(z, q, g) for g in t[4]),
+            t[5],
         )
     return None
 
@@ -973,7 +1092,7 @@ def rep_del1(
     ):
         return None
     new = (d, Y.ip_sub(Y.ip_v(u[0]), Y.ip_v(v[0])))
-    return (t[0], t[1], t[2], (*pre, new, *post), t[4])
+    return (t[0], t[1], t[2], (*pre, new, *post), t[4], t[5])
 
 
 def rep_del(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> ATm | None:
@@ -1042,6 +1161,7 @@ def cst_at(
         pre + tuple(at_sub(z, v, b) for b in post),
         tuple(Y.fac_sub(z, v, f) for f in t[3]),
         tuple(Y.fac_sub(z, v, f) for f in t[4]),
+        t[5],
     )
 
 
@@ -1067,7 +1187,7 @@ def xor_z_at(
     a2 = xor_z(a)
     if a2 is None:
         return None
-    return (t[0], t[1], pre + (a2,) + post, t[3], t[4])
+    return (t[0], t[1], pre + (a2,) + post, t[3], t[4], t[5])
 
 
 def find_at(l: Sequence[Atom], z: int) -> Atom | None:
@@ -1124,7 +1244,7 @@ def xor_at(
         a2 = xor_p(pw, pre, a)
     if a2 is None:
         return None
-    return (t[0], t[1], pre + (a2,) + post, t[3], t[4])
+    return (t[0], t[1], pre + (a2,) + post, t[3], t[4], t[5])
 
 
 def xor_p(pw: Sequence[tuple[Y.DMon, Y.DMon]], pre: Sequence[Atom], o: Atom) -> Atom | None:
@@ -1168,6 +1288,7 @@ def dedup_a(
         pre + tuple(at_sub(z, v, c) for c in post),
         tuple(Y.fac_sub(z, v, f) for f in t[3]),
         tuple(Y.fac_sub(z, v, f) for f in t[4]),
+        t[5],
     )
 
 
@@ -1194,7 +1315,7 @@ def mod_c_at(
     a2 = mod_c(a)
     if a2 is None:
         return None
-    return (t[0], t[1], pre + (a2,) + post, t[3], t[4])
+    return (t[0], t[1], pre + (a2,) + post, t[3], t[4], t[5])
 
 
 def dedup_w(
@@ -1218,6 +1339,7 @@ def dedup_w(
         t[2],
         tuple(Y.fac_sub(b[0], v, f) for f in t[3]),
         tuple(Y.fac_sub(b[0], v, f) for f in t[4]),
+        t[5],
     )
 
 
@@ -1248,7 +1370,7 @@ def dsub_at(
                 and all(not Y.ip_has(o, p) or Y.dm_dvd(m, f[0]) for p, m in a[4])
             ):
                 a2 = at_sub(o, Y.pin_val(s, b), a)
-                return (t[0], t[1], (*pre, a2, *post), t[3], t[4])
+                return (t[0], t[1], (*pre, a2, *post), t[3], t[4], t[5])
     return None
 
 
@@ -1312,6 +1434,7 @@ def dot_xor_at(
         (*pre, r[0], r[1], a, *post),
         tuple(Y.fac_sub(z, p, g) for g in t[3]),
         tuple(Y.fac_sub(z, p, g) for g in t[4]),
+        t[5],
     )
 
 
@@ -1335,7 +1458,7 @@ def ddot_swap_at(
     a2 = ddot_swap(a)
     if a2 is None:
         return None
-    return (t[0], t[1], (*pre, a2, *post), t[3], t[4])
+    return (t[0], t[1], (*pre, a2, *post), t[3], t[4], t[5])
 
 
 def is_m1(l: Sequence[Atom], z: int, n: Y.DMon) -> bool:
@@ -1387,7 +1510,7 @@ def m1_at(
     i = ids(t[2])
     if not (wf_a(t[2]) and len(i) == len(set(i))):
         return None
-    return (t[0], t[1], (*pre, a2, *post), t[3], t[4])
+    return (t[0], t[1], (*pre, a2, *post), t[3], t[4], t[5])
 
 
 def alias_at(
@@ -1415,6 +1538,7 @@ def alias_at(
         pre + tuple(at_sub(x, v, b) for b in post),
         tuple(Y.fac_sub(x, v, f) for f in t[3]),
         tuple(Y.fac_sub(x, v, f) for f in t[4]),
+        t[5],
     )
 
 
@@ -1449,7 +1573,7 @@ def false_at(fl: Sequence[int], t: ATm) -> ATm | None:
             continue
         i = ids(t[2])
         if wf_a(t[2]) and len(i) == len(set(i)):
-            return (t[0], t[1], t[2], (*pre, f2, *post), t[4])
+            return (t[0], t[1], t[2], (*pre, f2, *post), t[4], t[5])
         return None
     return None
 
@@ -1478,7 +1602,7 @@ def red_at(
     i = ids(t[2])
     if not (wf_a(t[2]) and len(i) == len(set(i))):
         return None
-    return (t[0], t[1], (*pre, a2, *post), t[3], t[4])
+    return (t[0], t[1], (*pre, a2, *post), t[3], t[4], t[5])
 
 
 def eq_del_of(ats: Sequence[Atom], f: Y.Fac) -> tuple[int, int] | None:
@@ -1523,6 +1647,7 @@ def eq_at(fl: Sequence[int], t: ATm) -> ATm | None:
                 t[2],
                 (*(Y.fac_sub(w, v, g) for g in pre), f, *(Y.fac_sub(w, v, g) for g in post)),
                 tuple(Y.fac_sub(w, v, g) for g in t[4]),
+                t[5],
             )
     return None
 
@@ -1573,7 +1698,7 @@ def canon_a(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], t: ATm) -> A
     if r is None:
         return None
     k, ds, ps = r
-    return sort_sums(sort_tab(canon_ren((Y.cm_mul(t3[0], k), t3[1], t3[2], ds, ps))))
+    return sort_sums(sort_tab(canon_ren((Y.cm_mul(t3[0], k), t3[1], t3[2], ds, ps, t3[5]))))
 
 
 def norm_a(fl: Sequence[int], pw: Sequence[tuple[Y.DMon, Y.DMon]], r: int, t: ATm) -> ATm | None:
@@ -1693,6 +1818,7 @@ def x_at(c: Ctx, t: ATm, pre: tuple[Atom, ...], a: Atom, post: tuple[Atom, ...])
         pre + new + tuple(at_sub(z, p, x) for x in post),
         tuple(Y.fac_sub(z, p, f) for f in t[3]),
         tuple(Y.fac_sub(z, p, f) for f in t[4]),
+        t[5],
     )
 
 
@@ -1703,7 +1829,7 @@ def x_ph(c: Ctx, t: ATm) -> ATm | None:
         if w is not None:
             z: Atom = (b, 12, (), (w[1], w[0]), ())
             g = (w[1], Y.ip_mul(Y.ip_v(b), f[1]))
-            return (t[0], t[1], (z, *t[2]), t[3], (*pre, g, *post))
+            return (t[0], t[1], (z, *t[2]), t[3], (*pre, g, *post), t[5])
     return None
 
 
@@ -1721,7 +1847,7 @@ def x_del(c: Ctx, t: ATm) -> ATm | None:
                 continue
             p2, r = lin
             if r == () and not Y.ip_has(z[0], p2):
-                return (t[0], t[1], t[2], (*pre, (w[0], p2), *post), t[4])
+                return (t[0], t[1], t[2], (*pre, (w[0], p2), *post), t[4], t[5])
     return None
 
 
@@ -1774,9 +1900,9 @@ def split_of(t: ATm, pre: tuple[Y.Fac, ...], f: Y.Fac, post: tuple[Y.Fac, ...]) 
         c = t[0]
         neg = (-c[0], *c[1:])
         return [
-            (c, t[1], t[2], (*pre, du, *post), t[4]),
-            (neg, t[1], t[2], (*pre, du, dc, *post), t[4]),
-            (c, t[1], t[2], (*pre, (f[0], r), dc, *post), t[4]),
+            (c, t[1], t[2], (*pre, du, *post), t[4], t[5]),
+            (neg, t[1], t[2], (*pre, du, dc, *post), t[4], t[5]),
+            (c, t[1], t[2], (*pre, (f[0], r), dc, *post), t[4], t[5]),
         ]
     return None
 
@@ -1815,7 +1941,7 @@ def real_t(rs: Sequence[int], t: ATm) -> ATm:
     c = t[0]
     for j in rs:
         c = real_c(j, c)
-    return (c, t[1], t[2], t[3], t[4])
+    return (c, t[1], t[2], t[3], t[4], t[5])
 
 
 def unit_c(j: int, m: Y.CMon) -> Y.CMon:
@@ -1832,7 +1958,7 @@ def unit_t(us: Sequence[int], t: ATm) -> ATm:
     c = t[0]
     for j in us:
         c = unit_c(j, c)
-    return (c, t[1], t[2], t[3], t[4])
+    return (c, t[1], t[2], t[3], t[4], t[5])
 
 
 # free variables in range
@@ -1850,6 +1976,7 @@ def rg_one(v: int, d: Y.DMon, t: ATm) -> ATm:
         (a, *(at_sub(v, w, b) for b in t[2])),
         tuple(Y.fac_sub(v, w, f) for f in t[3]),
         tuple(Y.fac_sub(v, w, f) for f in t[4]),
+        t[5],
     )
 
 
@@ -1857,3 +1984,68 @@ def rg_t(rg: Sequence[tuple[int, Y.DMon]], t: ATm) -> ATm:
     for v, d in rg:
         t = rg_one(v, d, t)
     return t
+
+
+# quadratic Gauss sums
+
+
+def gauss_k(y: int, d: Y.DMon, f: Y.Fac) -> int | None:
+    """``gaussK``."""
+    if f[0] != d:
+        return None
+    if tuple(f[1]) == (((y, y), 1),):
+        return 1
+    if tuple(f[1]) == (((y, y), -1),):
+        return -1
+    return None
+
+
+def gauss_out(
+    t: ATm, p: tuple[int, Y.DMon], pre: Sequence[Y.Fac], post: Sequence[Y.Fac], k: int
+) -> list[ATm]:
+    """``gaussOut``."""
+    a = max_v(t) + 1
+    c = Y.cm_mul(t[0], Y.cm_mul(Y.rt_d(p[1], 1), Y.of_q(Fraction(1, 2))))
+    ci = Y.cm_mul(c, Y.ex_q(Fraction(k, 4)))
+    ats = (*t[2], (a, 8, (), (p[1],), ()))
+    w: Y.Fac = ((4, ()), (((a,), -k),))
+    sums = tuple(t[1][:-1])
+    ph = (*pre, *post)
+    return [
+        (c, sums, ats, t[3], ph, t[5]),
+        (ci, sums, ats, t[3], ph, t[5]),
+        (c, sums, ats, t[3], (*ph, w), t[5]),
+        (ci, sums, ats, t[3], (*ph, w), t[5]),
+    ]
+
+
+def gauss_one(t: ATm) -> list[ATm] | None:
+    """``gaussOne``."""
+    if not t[1]:
+        return None
+    p = t[1][-1]
+    y = p[0]
+    for pre, f, post in Y._splits(t[4]):
+        k = gauss_k(y, p[1], f)
+        if k is None:
+            continue
+        reads = [x for g in (*t[3], *pre, *post) for x in ip_vs(g[1])]
+        aps_reads = [x for a in t[5] for x in ap_vs(a)]
+        if (
+            0 < p[1][0]
+            and y not in reads
+            and y not in arg_vs(t[2])
+            and y not in ids(t[2])
+            and y not in aps_reads
+        ):
+            return gauss_out(t, p, pre, post, k)
+    return None
+
+
+def gauss_a(e: Sequence[ATm]) -> list[ATm]:
+    """``gaussA``."""
+    out: list[ATm] = []
+    for t in e:
+        g = gauss_one(t)
+        out += [t] if g is None else g
+    return out

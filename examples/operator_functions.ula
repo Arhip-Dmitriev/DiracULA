@@ -1,7 +1,8 @@
 # Functions of operators: exp(i t X), exp(i t sum_j Z_j) on n qubits, exp(i t S) for the shift
 # S of a qudit of dimension d, the square root of SWAP, and exp(i t M) of matrices with
-# eigenvalues +-sqrt(2) and (1 +- sqrt(5))/2, a Jordan block, and companion matrices of
-# x^3 - x - 1 and x^5 - x - 1, whose roots appear as eigenvalue symbols.
+# eigenvalues +-sqrt(2) and (1 +- sqrt(5))/2, a Jordan block, companion matrices of
+# x^3 - x - 1 and x^5 - x - 1, whose roots appear as eigenvalue symbols, that cubic with the
+# eigenvalue 2, and a Jordan block of the cubic.
 var t: real
 var n, d
 
@@ -20,3 +21,7 @@ gate P5 = [[0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0], [0, 0, 0, 0, 1], [
 show(exp(i*t*J) |1>)
 show(exp(i*t*K) |0>_3)
 show(exp(i*t*P5) |0>_5)
+gate KM = [[0, 1, 0, 0], [0, 0, 1, 0], [1, 1, 0, 0], [0, 0, 0, 2]]
+gate KJ = [[0, 1, 0, 1, 0, 0], [0, 0, 1, 0, 1, 0], [1, 1, 0, 0, 0, 1], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1], [0, 0, 0, 1, 1, 0]]
+show(exp(i*t*KM) |0>_4)
+show(exp(i*t*KJ) |3>_6)

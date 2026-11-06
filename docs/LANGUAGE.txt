@@ -405,6 +405,15 @@ f(c A) uses c l_j. The spectral form is found, in order, for
 
             note: λ_0, λ_1, λ_2 are the roots of q = x**3 - x - 1, w_j = 1/q'(λ_j)
 
+        and otherwise, each root of a factor not in square roots an eigenvalue symbol, by
+        Hermite interpolation sum_m (sum_{a,r} phi_a_r h_a_r_m) A^m, phi_a_r the r-th Taylor
+        coefficient of f(c x) at eigenvalue a and h_a_r_m the coefficient of x^m in its
+        Hermite basis polynomial, with the note
+
+            note: h_a_r_m is the coefficient of x^m in the polynomial H_a_r of degree below 4
+            with H_a_r^(s)(l_b)/s! = [a = b][r = s] at the eigenvalues l of the indices
+            0: 2, 1: λ_0, 2: λ_1, 3: λ_2
+
     F5  f(A @ I) = f(A) @ I; exp(A @ I + I @ B) = exp(A) @ exp(B); exp of a sum of pairwise
         commuting operators; exp(c sum(j in 0..n){ I^@j @ A @ I^@(n - 1 - j) }) =
         exp(c A)^@n for a symbolic n.
@@ -416,8 +425,6 @@ An eigenvalue on the branch cut of sqrt, log or a power is noted with the value 
 Otherwise f(A) fails with one of
 
     error: cannot compute f(A): no spectral form known for A
-    error: cannot compute f(A): a characteristic polynomial with a repeated factor whose roots
-           are not square roots over the rationals
     error: cannot compute f(A): A + B with non-commuting terms
     error: cannot compute log(A): eigenvalue 0 of log
 

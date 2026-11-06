@@ -156,8 +156,15 @@ The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read a
                         roots are eigenvalue symbols l_j, w_j = 1/q'(l_j), and f(c M) =
                         sum_j f(c l_j) w_j prod_{k != j} (M - l_k I); l_j, w_j and f(c l_j) are
                         coefficient atoms, so the theorem holds for all their values, and the
-                        file proves q(M) = 0. Each power M^k, k >= 2, is an explicit matrix with
-                        the side theorem M^k = M M^(k-1); identities at inputs in range.
+                        file proves q(M) = 0. With several factors, or a repeated factor whose
+                        roots are not in square roots, each such root is an eigenvalue symbol
+                        and f(c M) = sum_m (sum_{a,r} phi_a_r h_a_r_m) M^m, phi_a_r the r-th
+                        Taylor coefficient of f(c x) at l_a and h_a_r_m the coefficient of x^m
+                        in the Hermite basis polynomial H_a_r (H_a_r^(s)(l_b)/s! = [a = b][r = s]),
+                        both coefficient atoms; the file proves mu(M) = 0, mu the product of the
+                        irreducible factors to their indices. Each power M^k,
+                        k >= 2, is an explicit matrix with the side theorem M^k = M M^(k-1);
+                        identities at inputs in range.
   U^k, k symbolic       the loop of k steps of U from the identity kernel, its invariant the
                         engine's U^J on a basis ket of the input registers; an operator the
                         engine writes as the identity plus outer products, such as the Grover
@@ -378,6 +385,4 @@ Adjoints, inverses, integer and symbolic powers applied to states, traces, parti
 partial and basis measurements, channels and their trace preservation, and functions of
 operators are certified (section 4). The following report "cannot certify":
   - a power U^k whose iterate has amplitudes outside the coefficients, phases, atoms and
-    built-in values of section 4, or that the engine leaves unevaluated;
-  - an explicit matrix whose characteristic polynomial has a repeated factor whose roots are
-    not square roots over the rationals, or has several factors not all of that kind.
+    built-in values of section 4, or that the engine leaves unevaluated.

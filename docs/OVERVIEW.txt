@@ -107,11 +107,10 @@ syntax, equals the printed closed form for every value of its size symbols (LEAN
     "cannot raise A to the symbolic power k: no closed-form iterate", or, for an exponent of
     unknown sign without an inverse, "...: A has no closed-form inverse; assume k >= 0".
   - A function of an operator outside the classes F1 to F5 of LANGUAGE.txt, section 8.8,
-    fails: "cannot compute f(A): no spectral form known for A", "a characteristic polynomial
-    with a repeated factor whose roots are not square roots over the rationals", "A + B with
-    non-commuting terms" or "eigenvalue 0 of log"; an eigenvalue on a branch cut is noted with
-    the principal value taken, eigenvalues outside square roots are kept as symbols, and no
-    numerical value is substituted.
+    fails: "cannot compute f(A): no spectral form known for A", "A + B with non-commuting
+    terms" or "eigenvalue 0 of log"; an eigenvalue on a branch cut is noted with the principal
+    value taken, eigenvalues outside square roots are kept as symbols, and no numerical value
+    is substituted.
   - Results of the operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, whose
     proof needs amplitudes outside the normaliser's grammar are not certified (LEAN.txt,
     section 10.2).

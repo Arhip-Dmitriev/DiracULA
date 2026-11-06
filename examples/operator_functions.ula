@@ -1,5 +1,6 @@
 # Functions of operators: exp(i t X), exp(i t sum_j Z_j) on n qubits, exp(i t S) for the shift
-# S of a qudit of dimension d, and the square root of SWAP.
+# S of a qudit of dimension d, the square root of SWAP, and exp(i t M) of matrices with
+# eigenvalues +-sqrt(2) and (1 +- sqrt(5))/2.
 var t: real
 var n, d
 
@@ -8,3 +9,7 @@ show(exp(i*t*sum(j in 0..n){ I^@j @ Z @ I^@(n - 1 - j) }) H^@n |0>^@n)
 gate SH = |x>_d -> |(x + 1) % d>_d
 show(exp(i*t*SH) |0>_d)
 show(sqrt(SWAP) |0>|1>)
+gate M = [[1, 1], [1, -1]]
+gate F = [[1, 1], [1, 0]]
+show(exp(i*t*M) |0>)
+show(exp(i*t*F) |0>)

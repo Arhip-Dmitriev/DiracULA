@@ -72,7 +72,8 @@ A dimension d^(n + c), c < 0, of a width n assumed at least L with L + c ≥ 1 h
 from the hypothesis L ≤ n.
 
 A result of a program containing a loop over a symbolic range holds at every ν for which
-the loop counts are nonnegative. An assertion A == B is proved as A.sem V = B.sem V. A
+the loop counts are nonnegative. An assertion A == B of scalars, states or operators is proved
+as A.sem V = B.sem V, for operators at every input in range where needed. A
 measured distribution is proved as one theorem per branch (the branch's probability is
 |<value|psi>|^2), one that the probabilities sum to 1, one that <psi|psi> = 1 and, for a
 function of the outcomes or an expression of measured values, one that every outcome maps
@@ -146,7 +147,11 @@ The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read a
                         projectors (1/m) sum_r w^(-j r) A^r for A^m = I; the file proves that
                         polynomial identity of A (a side theorem). A diagonal A on one register
                         of at most 4 levels is the kernel sum_v f(c a(v)) [o = v][x = v], with
-                        the theorem that A is that diagonal.
+                        the theorem that A is that diagonal. An explicit matrix with distinct
+                        eigenvalues l_j in radicals has E_j = prod_{k != j} (A - l_k I)/(l_j - l_k),
+                        with the side theorem prod_j (A - l_j I) = 0 (at inputs in range).
+  U^k, k symbolic       the loop of k steps of U from the identity kernel, its invariant the
+                        engine's U^J on a basis ket of the input registers.
   exp(c sum_{j<n} I^@j @ G @ I^@(n-1-j))
                         on one register of n qubits, G a gate defined as |y> -> a(y) |y>: the
                         kernel [o = x] e^(c (a(0) (n - pop(o)) + a(1) pop(o))), pop the digit sum.
@@ -161,6 +166,9 @@ integer c is read through the coefficient atom z = e^(i t), e^(-i t) as its conj
 theorem then holds for every nonzero z, in particular z = e^(i t). Where the normaliser needs
 |z| = 1, the theorem has the hypothesis z conj(z) = 1 for each such atom, under which the
 exponent of the conjugate atom is moved onto z negated (unitT, certify_unit_c). A phase
+e^(i c t) of an irrational multiple c = q r, q rational, is read through the atom
+z = e^(i u r t), u the unit 1/den(q) fixed at its first use, c t then an integer multiple of
+u r t. A phase
 e^(i E t) of an integer index expression E is the power z^E of the atom, a factor of the term
 whose exponent E is read through its own table of atoms (ATm.aps); a width n in E is read as a
 parameter of the program, as in a loop count. A real
@@ -358,9 +366,7 @@ Adjoints, inverses, integer and symbolic powers applied to states, traces, parti
 partial and basis measurements, channels and their trace preservation, and functions of
 operators are certified (section 4). The following report "cannot certify":
   - a power U^k whose iterate has amplitudes outside the coefficients, phases, atoms and
-    built-in values of section 4, and a symbolic power of an operator not applied to a
-    state;
-  - an explicit matrix whose eigenvalues are radicals (class F4 of LANGUAGE.txt, section 8.8);
-  - an operator named by gate G = EXPRESSION is translated through EXPRESSION; an assertion
-    between two states or two operators is certified only as a scalar equation, such as
-    <v|u> == 1.
+    built-in values of section 4, or that the engine leaves unevaluated;
+  - an explicit matrix with a repeated eigenvalue, or with eigenvalues outside rationals and
+    square roots of integers (nested radicals, cube roots of Cardano's formula), or a
+    function value at an eigenvalue that is not a phase e^(i r t) of a real symbol t.

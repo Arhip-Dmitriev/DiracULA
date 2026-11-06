@@ -1,5 +1,5 @@
 # Adjoints and inverses, for every dimension d: the Fourier transform undone by its adjoint,
-# and n inverse steps of an affine shift, |x> -> |x - n b mod d>.
+# and n inverse steps of an affine shift, |x> -> |x - n b mod d>; the shift to a symbolic power.
 var d, x, n, b
 assume x < d
 
@@ -11,6 +11,9 @@ show(QFT^dagger |v>)
 |u>_d = QFT^dagger QFT |v>
 show(|u>)
 assert <v|u> == 1
+assert |u> == |v>
+assert QFT^dagger QFT == I
 
 show(A^-1 |x>_d)
 show((A^-1)^n |x>_d)
+show(A^n)

@@ -147,11 +147,21 @@ The operations of LANGUAGE.txt, sections 8.7, 8.8, 11.4, 11.5 and 20, are read a
                         projectors (1/m) sum_r w^(-j r) A^r for A^m = I; the file proves that
                         polynomial identity of A (a side theorem). A diagonal A on one register
                         of at most 4 levels is the kernel sum_v f(c a(v)) [o = v][x = v], with
-                        the theorem that A is that diagonal. An explicit matrix with distinct
-                        eigenvalues l_j in radicals has E_j = prod_{k != j} (A - l_k I)/(l_j - l_k),
-                        with the side theorem prod_j (A - l_j I) = 0 (at inputs in range).
+                        the theorem that A is that diagonal.
+  f(c M), M a matrix    with eigenvalues l_j in square roots over the rationals, of index m_j in
+                        the minimal polynomial mu: sum_k a_k M^k, p = sum_k a_k x^k the Hermite
+                        interpolation p^(r)(l_j) = (d/dx)^r f(c x) at l_j, r < m_j; the file
+                        proves mu(M) = 0. With an irreducible characteristic polynomial q whose
+                        roots are not (degree 3 or 4 beyond square roots, any degree >= 5): the
+                        roots are eigenvalue symbols l_j, w_j = 1/q'(l_j), and f(c M) =
+                        sum_j f(c l_j) w_j prod_{k != j} (M - l_k I); l_j, w_j and f(c l_j) are
+                        coefficient atoms, so the theorem holds for all their values, and the
+                        file proves q(M) = 0. Each power M^k, k >= 2, is an explicit matrix with
+                        the side theorem M^k = M M^(k-1); identities at inputs in range.
   U^k, k symbolic       the loop of k steps of U from the identity kernel, its invariant the
-                        engine's U^J on a basis ket of the input registers.
+                        engine's U^J on a basis ket of the input registers; an operator the
+                        engine writes as the identity plus outer products, such as the Grover
+                        iterate, shown in that form and proved equal to the loop.
   exp(c sum_{j<n} I^@j @ G @ I^@(n-1-j))
                         on one register of n qubits, G a gate defined as |y> -> a(y) |y>: the
                         kernel [o = x] e^(c (a(0) (n - pop(o)) + a(1) pop(o))), pop the digit sum.
@@ -276,7 +286,9 @@ Besides these moves, the normaliser
     that x can then be eliminated;
   - orders the atom table canonically, each step the atom of least key among those that read
     no atom left, names the atoms by first occurrence in the factors and then in the table,
-    renames bound variables by first occurrence and sorts the sums.
+    renames bound variables by first occurrence and sorts the sums;
+  - merges the powers z^E of one atom or built-in value without atoms of their own into one,
+    their exponents added, sorted by index (apsCanon).
 A loop is proved by induction on its count: the engine's invariant S(J) is shown to equal
 the initial state at J = lo and to satisfy S(J + 1) = step_J(S(J)), both by the normaliser
 with J free. A power z^E of an index without atoms of its own is substituted in its exponent,
@@ -367,6 +379,5 @@ partial and basis measurements, channels and their trace preservation, and funct
 operators are certified (section 4). The following report "cannot certify":
   - a power U^k whose iterate has amplitudes outside the coefficients, phases, atoms and
     built-in values of section 4, or that the engine leaves unevaluated;
-  - an explicit matrix with a repeated eigenvalue, or with eigenvalues outside rationals and
-    square roots of integers (nested radicals, cube roots of Cardano's formula), or a
-    function value at an eigenvalue that is not a phase e^(i r t) of a real symbol t.
+  - an explicit matrix whose characteristic polynomial has a repeated factor whose roots are
+    not square roots over the rationals, or has several factors not all of that kind.

@@ -397,8 +397,14 @@ f(c A) uses c l_j. The spectral form is found, in order, for
         Fourier basis with eigenvalues <k|F^dagger A F|k>; V D V^dagger written so with V
         proved unitary, kept factored;
     F3  A^m == I or A^m == A for a concrete m <= 8, by interpolation on the roots of unity;
-    F4  an explicit matrix whose characteristic polynomial has factors of degree at most 4,
-        by its Jordan form in radicals;
+    F4  an explicit matrix: with eigenvalues in square roots over the rationals, by Hermite
+        interpolation of f on them, repeated eigenvalues and Jordan blocks included; with an
+        irreducible characteristic polynomial q of any degree whose roots are not, as
+        sum_j f(c l_j) w_j prod_{k != j} (A - l_k I) over eigenvalue symbols l_j, the roots
+        of q, and w_j = 1/q'(l_j), with the note
+
+            note: λ_0, λ_1, λ_2 are the roots of q = x**3 - x - 1, w_j = 1/q'(λ_j)
+
     F5  f(A @ I) = f(A) @ I; exp(A @ I + I @ B) = exp(A) @ exp(B); exp of a sum of pairwise
         commuting operators; exp(c sum(j in 0..n){ I^@j @ A @ I^@(n - 1 - j) }) =
         exp(c A)^@n for a symbolic n.
@@ -410,7 +416,8 @@ An eigenvalue on the branch cut of sqrt, log or a power is noted with the value 
 Otherwise f(A) fails with one of
 
     error: cannot compute f(A): no spectral form known for A
-    error: cannot compute f(A): characteristic polynomial of degree k not solvable in radicals
+    error: cannot compute f(A): a characteristic polynomial with a repeated factor whose roots
+           are not square roots over the rationals
     error: cannot compute f(A): A + B with non-commuting terms
     error: cannot compute log(A): eigenvalue 0 of log
 

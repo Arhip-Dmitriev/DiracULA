@@ -1,6 +1,6 @@
 # The Grover iterate G = (2|s><s| - I)(I - 2|w><w|) raised to a symbolic power k, for every
 # n >= 1: G is the identity plus two outer products, so G^k is a rotation of the plane of
-# |s> and |w> by k acos(1 - 2/2^n).
+# |s> and |w> by k acos(1 - 2/2^n), shown also as the operator G^k itself.
 var n, k, w
 assume w < 2^n
 assume n >= 1
@@ -11,3 +11,4 @@ assume n >= 1
 gate G = (2 |s><s| - I) (I - 2 |m><m|)
 
 show(G^k |s>)
+show(G^k)

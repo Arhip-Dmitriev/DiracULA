@@ -2968,6 +2968,15 @@ class Certifier:
                     for m, cm in enumerate(cs):
                         coef[m] += f(c * lj) * O.WEIGHTS[lj] * cm  # type: ignore[operator]
                 title = f"q({base}) = 0 for its characteristic polynomial q"
+            elif full[0] == "mixed":
+                eigs, facs = cast(tuple[list[Any], list[Any]], full[1])
+                mu = sympy.Mul(*(qp.as_expr().subs(qp.gen, xv) ** e for qp, e in facs))
+                char = [sympy.Integer(v) for v in reversed(sympy.Poly(mu, xv).all_coeffs())]
+                self.vs.prime_angles(
+                    [sympy.expand(c * lv) for lv, _ in eigs if sympy.sympify(lv).is_number]
+                )
+                coef = O.hermite_atoms(f, c, eigs)
+                title = f"the minimal polynomial of {base}"
             else:
                 spec = cast(list[Any], full[1])
                 mu = sympy.Mul(*((xv - lv) ** idx for lv, idx, _ in spec))
@@ -5367,14 +5376,14 @@ class Certifier:
             *(
                 [
                     (
-                        "  Eigenvalue atoms: λ_j, w_j and each function value at λ_j are "
-                        "coefficient atoms, so the theorem holds for all their values, in "
+                        "  Eigenvalue atoms: λ_j, w_j, h_a_r_m and each function value at "
+                        "λ_j are coefficient atoms, so the theorem holds for all their values, in "
                         "particular for λ_j the roots of the matrix's characteristic polynomial q "
-                        "(proved q(A) = 0) "
+                        "(proved q(A) = 0, or the minimal polynomial of A is 0) "
                         "and w_j = 1/q'(λ_j)."
                     )
                 ]
-                if any(str(c).startswith(("λ_", "w_")) for c in vs.catoms)
+                if any(str(c).startswith(("λ_", "w_", "h_")) for c in vs.catoms)
                 else []
             ),
             "-/",
@@ -5387,6 +5396,8 @@ class Certifier:
             "set_option linter.unusedVariables false",
             "set_option linter.unusedTactic false",
             "set_option linter.unnecessarySeqFocus false",
+            "set_option maxHeartbeats 0",
+            "set_option maxRecDepth 100000",
             "",
             *(d + "\n" for d in dims),
             *decls,
